@@ -146,6 +146,58 @@ def test_split_ratio_and_disjoint():
     assert len(ids_t | ids_v) == 200
 
 
+# --- T1(OOD): leave-axis-out 3분할 ---
+def _mk_meta(rows, axes):
+    """rows에 축을 라운드로빈 배정한 {sample_id: meta}."""
+    return {
+        r["sample_id"]: {"sample_id": r["sample_id"], "axis": axes[i % len(axes)]}
+        for i, r in enumerate(rows)
+    }
+
+
+def test_split_ood_holds_out_only_given_axes():
+    rows = _mk_rows(300)
+    meta = _mk_meta(rows, ["Age", "Religion", "SES", "Sexual_orientation"])
+    train, in_val, ood = D.split_train_val_ood(
+        rows, meta, seed=42, val_ratio=0.05, ood_axes=["Religion", "Sexual_orientation"]
+    )
+    ood_axes_seen = {meta[r["sample_id"]]["axis"] for r in ood}
+    assert ood_axes_seen == {"Religion", "Sexual_orientation"}
+    # train/in_val에는 OOD 축이 전혀 없어야 함
+    for r in train + in_val:
+        assert meta[r["sample_id"]]["axis"] not in {"Religion", "Sexual_orientation"}
+
+
+def test_split_ood_partition_is_complete_and_disjoint():
+    rows = _mk_rows(300)
+    meta = _mk_meta(rows, ["Age", "Religion", "SES", "Sexual_orientation"])
+    train, in_val, ood = D.split_train_val_ood(
+        rows, meta, seed=42, val_ratio=0.05, ood_axes=["Religion"]
+    )
+    ids = [{r["sample_id"] for r in s} for s in (train, in_val, ood)]
+    assert ids[0].isdisjoint(ids[1]) and ids[0].isdisjoint(ids[2]) and ids[1].isdisjoint(ids[2])
+    assert ids[0] | ids[1] | ids[2] == {r["sample_id"] for r in rows}
+
+
+def test_split_ood_empty_axes_matches_plain_split():
+    rows = _mk_rows(200)
+    meta = _mk_meta(rows, ["Age", "SES"])
+    train, in_val, ood = D.split_train_val_ood(rows, meta, seed=42, val_ratio=0.05, ood_axes=[])
+    pt, pv = D.split_train_val(rows, seed=42, val_ratio=0.05)
+    assert ood == []
+    assert [r["sample_id"] for r in train] == [r["sample_id"] for r in pt]
+    assert [r["sample_id"] for r in in_val] == [r["sample_id"] for r in pv]
+
+
+def test_split_ood_is_deterministic():
+    rows = _mk_rows(300)
+    meta = _mk_meta(rows, ["Age", "Religion", "SES"])
+    a = D.split_train_val_ood(rows, meta, seed=42, val_ratio=0.05, ood_axes=["Religion"])
+    b = D.split_train_val_ood(list(reversed(rows)), meta, seed=42, val_ratio=0.05, ood_axes=["Religion"])
+    for sa, sb in zip(a, b):
+        assert [r["sample_id"] for r in sa] == [r["sample_id"] for r in sb]
+
+
 def test_resolve_image_path():
     p = D.resolve_image_path("/data/train", "./images/train_img_000001.jpg")
     assert str(p) == "/data/train/images/train_img_000001.jpg"
