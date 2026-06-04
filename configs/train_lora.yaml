@@ -23,8 +23,8 @@ num_train_epochs: 2
 per_device_train_batch_size: 8      # 안전 micro-batch(batch 16=95%는 위험)
 per_device_eval_batch_size: 8
 gradient_accumulation_steps: 4      # effective batch = 32 (= 2^5)
-learning_rate: 2.0e-4               # effective batch 32 기준(36→32 변화 미미해 유지)
-warmup_ratio: 0.03
+learning_rate: 1.0e-4               # 2e-4는 warmup peak(step~6)에서 grad NaN 발산 → 1e-4로 하향
+warmup_ratio: 0.1                   # 0.03(짧음)은 lr 급상승 중 발산 → 0.1로 완만히
 weight_decay: 0.0
 lr_scheduler_type: cosine
 logging_steps: 10

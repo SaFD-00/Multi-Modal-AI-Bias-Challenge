@@ -155,6 +155,7 @@ def main():
         gradient_accumulation_steps=cfg["gradient_accumulation_steps"],
         learning_rate=cfg["learning_rate"],
         warmup_ratio=cfg["warmup_ratio"],
+        max_grad_norm=cfg.get("max_grad_norm", 1.0),  # gradient clipping (발산 완화)
         weight_decay=cfg["weight_decay"],
         lr_scheduler_type=cfg["lr_scheduler_type"],
         logging_steps=cfg["logging_steps"],
