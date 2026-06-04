@@ -1,4 +1,4 @@
-# LLaVA-OneVision LoRA 학습 설정 (A100 80GB x 1 기준)
+# LLaVA-OneVision LoRA 학습 설정 (H100 80GB x 1 기준)
 # 베이스라인 추론 모델과 동일 → merge 후 추론 노트북에 그대로 로드 가능.
 
 model_id: llava-hf/llava-onevision-qwen2-0.5b-si-hf
@@ -13,13 +13,15 @@ max_length: 4096       # anyres-9 이미지 토큰 확장 여유
 # 출력
 output_dir: outputs/llava_ov_lora
 
-# 학습 하이퍼파라미터
+# 학습 하이퍼파라미터 (H100 80GB 실측 튜닝)
+# 전체 데이터 실측: batch 16은 peak 77GB/80GB(95%, 무인 실행엔 위험), batch 32는 OOM.
+# anyres 3-patch 이미지 + 긴 시퀀스 변동을 고려해 batch 12로 안전 마진(peak ≈ 60GB) 확보.
 seed: 42
 num_train_epochs: 2
-per_device_train_batch_size: 8
-per_device_eval_batch_size: 8
-gradient_accumulation_steps: 2      # effective batch = 16
-learning_rate: 1.0e-4
+per_device_train_batch_size: 12     # H100 80GB 실측 안전값(batch 16=95%는 위험)
+per_device_eval_batch_size: 12
+gradient_accumulation_steps: 3      # effective batch = 36
+learning_rate: 2.0e-4               # effective batch 확대(16→36)에 맞춘 스케일
 warmup_ratio: 0.03
 weight_decay: 0.0
 lr_scheduler_type: cosine
