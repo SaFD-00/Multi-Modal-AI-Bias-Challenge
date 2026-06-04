@@ -41,6 +41,11 @@ axes:
   - SES
   - Sexual_orientation
 
+# OOD 검증셋(leave-axis-out): 아래 bias 축을 통째로 hold-out → 학습에서 안 본 축의 일반화 검증.
+# 학습(train.py)·검증(validate --ood)이 공유하는 정본. 빈 리스트([])면 OOD 비활성(기존 IID val).
+# 텍스트 shortcut 암기(Public/Private Shake-up 붕괴)를 진단할 대상 축을 조정한다.
+ood_axes: [Religion, Sexual_orientation]
+
 # 분포 검증 허용오차 (validate)
 distribution_tolerance: 0.05
 

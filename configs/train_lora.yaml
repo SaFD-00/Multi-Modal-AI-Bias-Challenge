@@ -7,8 +7,9 @@ model_id: llava-hf/llava-onevision-qwen2-0.5b-si-hf
 train_csv: data/processed/train/train.csv
 images_dir: data/processed/train
 img_size: 224          # 베이스라인 추론과 동일
-val_ratio: 0.05        # 95/5 split
+val_ratio: 0.05        # 95/5 split (OOD 제외분 기준)
 max_length: 4096       # anyres-9 이미지 토큰 확장 여유
+# OOD 검증셋(leave-axis-out)은 config.yaml의 ood_axes + paths.metadata를 정본으로 읽는다.
 
 # 출력
 output_dir: outputs/llava_ov_lora

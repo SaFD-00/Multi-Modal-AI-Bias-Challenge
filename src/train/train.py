@@ -17,7 +17,13 @@ import yaml
 
 from ..common import project_root
 from .collator import LlavaOVCollator
-from .dataset import BiasVQADataset, load_rows, split_train_val
+from .dataset import (
+    BiasVQADataset,
+    load_metadata,
+    load_rows,
+    split_train_val,
+    split_train_val_ood,
+)
 
 
 def load_train_config(path):
@@ -96,19 +102,42 @@ def main():
     root = project_root()
     cfg = load_train_config(_abs(root, args.config))
 
-    unknown_lexicon = []
+    # 데이터 레벨 설정(unknown_lexicon, ood_axes, metadata 경로)은 config.yaml이 정본.
+    unknown_lexicon, ood_axes, meta_rel = [], [], None
     cfg_yaml = root / "config.yaml"
     if cfg_yaml.exists():
-        unknown_lexicon = yaml.safe_load(open(cfg_yaml))["unknown_lexicon"]
+        data_cfg = yaml.safe_load(open(cfg_yaml))
+        unknown_lexicon = data_cfg.get("unknown_lexicon", [])
+        ood_axes = data_cfg.get("ood_axes") or []
+        meta_rel = data_cfg.get("paths", {}).get("metadata")
 
     rows = load_rows(_abs(root, cfg["train_csv"]))
     if args.max_samples:
         rows = rows[: args.max_samples]
-    train_rows, val_rows = split_train_val(rows, seed=cfg["seed"], val_ratio=cfg["val_ratio"])
     images_dir = _abs(root, cfg["images_dir"])
-    train_ds = BiasVQADataset(train_rows, images_dir)
-    val_ds = BiasVQADataset(val_rows, images_dir)
-    print(f"train={len(train_ds)} val={len(val_ds)}")
+
+    # OOD 검증셋: ood_axes 지정 + metadata 존재 시 leave-axis-out 3분할.
+    # eval_dataset을 {"in": ..., "ood": ...} dict로 주면 Trainer가 eval_in_loss/eval_ood_loss를
+    # 각각 로깅하고, metric_for_best_model="eval_ood_loss"로 OOD 기준 best를 고른다.
+    meta_path = _abs(root, meta_rel) if meta_rel else None
+    if ood_axes and meta_path and meta_path.exists():
+        meta = load_metadata(meta_path)
+        train_rows, in_rows, ood_rows = split_train_val_ood(
+            rows, meta, seed=cfg["seed"], val_ratio=cfg["val_ratio"], ood_axes=ood_axes
+        )
+        train_ds = BiasVQADataset(train_rows, images_dir)
+        eval_dataset = {
+            "in": BiasVQADataset(in_rows, images_dir),
+            "ood": BiasVQADataset(ood_rows, images_dir),
+        }
+        best_metric = "eval_ood_loss"
+        print(f"train={len(train_rows)} in_val={len(in_rows)} ood_val={len(ood_rows)} (ood_axes={ood_axes})")
+    else:
+        train_rows, val_rows = split_train_val(rows, seed=cfg["seed"], val_ratio=cfg["val_ratio"])
+        train_ds = BiasVQADataset(train_rows, images_dir)
+        eval_dataset = BiasVQADataset(val_rows, images_dir)
+        best_metric = "eval_loss"
+        print(f"train={len(train_rows)} val={len(val_rows)}")
 
     model, processor = build_model_and_processor(cfg)
     collator = LlavaOVCollator(
@@ -134,6 +163,8 @@ def main():
         eval_strategy="epoch",
         save_strategy="epoch",
         load_best_model_at_end=True,
+        metric_for_best_model=best_metric,   # OOD 활성 시 eval_ood_loss 기준 best
+        greater_is_better=False,
         seed=cfg["seed"],
         report_to=report_to,
         run_name=cfg.get("run_name"),
@@ -145,7 +176,7 @@ def main():
         model=model,
         args=targs,
         train_dataset=train_ds,
-        eval_dataset=val_ds,
+        eval_dataset=eval_dataset,
         data_collator=collator,
     )
     trainer.train()
