@@ -1,0 +1,61 @@
+# Train 데이터 구축 파이프라인 설정 (SKKU 멀티모달 AI Bias 챌린지)
+seed: 42
+
+# 구축 모드: false=하이브리드(SB-Bench 주력+BBQ 보강), true=안전모드(BBQ+검색만)
+safe_only: false
+
+# 규모: 셀(9축 × ambig/disambig × 2 polarity ≈ 36셀)당 상한
+target_per_cell: 2400
+
+# 비율 구성 (compose 단계)
+ratios:
+  ambig_to_disambig: 1.0   # ambiguous : disambiguated = 1 : 1
+  polarity: 1.0            # neg : nonneg = 1 : 1
+  # 9축은 균등 분배 (셀별 target_per_cell 상한으로 제어)
+
+# Unknown 재다양화: test.csv 관측 비례 재현 (proportional) | uniform
+unknown_distribution: proportional
+
+# test 관측 Unknown 표현 10종 (정본)
+unknown_lexicon:
+  - "Can't answer"
+  - "Not answerable"
+  - "Undetermined"
+  - "Not known"
+  - "Not enough information"
+  - "Can't be determined"
+  - "Cannot be determined"
+  - "Not enough info"
+  - "Unknown"
+  - "Cannot answer"
+
+# 9축 정규화 라벨
+axes:
+  - Age
+  - Disability_status
+  - Gender_identity
+  - Nationality
+  - Physical_appearance
+  - Race_ethnicity
+  - Religion
+  - SES
+  - Sexual_orientation
+
+# 분포 검증 허용오차 (validate)
+distribution_tolerance: 0.05
+
+# 경로
+paths:
+  sb_bench_dir: data/external/sb_bench
+  bbq_dir: data/external/bbq
+  mapped: data/interim/mapped.jsonl
+  train_csv: data/processed/train/train.csv
+  train_images: data/processed/train/images
+  metadata: data/metadata.jsonl
+  test_csv: data/raw/test/test.csv
+
+# HF 데이터셋 ID
+datasets:
+  sb_bench: ucf-crcv/SB-Bench
+  sb_split: real          # 실사 이미지 split (대회 test 분포 정합). 'synthetic' 제외.
+  bbq: nyu-mll/BBQ        # 실제 로드는 GitHub raw JSONL (augment_bbq.BBQ_RAW_BASE)

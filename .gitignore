@@ -1,0 +1,26 @@
+# Data (large artifacts, not versioned)
+data/
+
+# Environments & secrets
+.venv/
+.env
+
+# Python caches
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+
+# Claude workspace outputs
+.claude/plans/
+.claude/researchs/
+.claude/analysis/
+.claude/reflexions/
+.claude/state/
+.claude/settings.local.json
+
+# Large reference archive (exceeds GitHub limits)
+.claude/references/open.zip
+
+# OS junk
+.DS_Store

@@ -1,0 +1,38 @@
+# LLaVA-OneVision LoRA 학습 설정 (A100 80GB x 1 기준)
+# 베이스라인 추론 모델과 동일 → merge 후 추론 노트북에 그대로 로드 가능.
+
+model_id: llava-hf/llava-onevision-qwen2-0.5b-si-hf
+
+# 데이터 (data/processed/train 기준)
+train_csv: data/processed/train/train.csv
+images_dir: data/processed/train
+img_size: 224          # 베이스라인 추론과 동일
+val_ratio: 0.05        # 95/5 split
+max_length: 4096       # anyres-9 이미지 토큰 확장 여유
+
+# 출력
+output_dir: outputs/llava_ov_lora
+
+# 학습 하이퍼파라미터
+seed: 42
+num_train_epochs: 2
+per_device_train_batch_size: 8
+per_device_eval_batch_size: 8
+gradient_accumulation_steps: 2      # effective batch = 16
+learning_rate: 1.0e-4
+warmup_ratio: 0.03
+weight_decay: 0.0
+lr_scheduler_type: cosine
+logging_steps: 10
+bf16: true
+gradient_checkpointing: true
+
+# LoRA (LLM에만 적용, 비전타워/projector freeze)
+lora_r: 16
+lora_alpha: 32
+lora_dropout: 0.05
+lora_target_modules: [q_proj, k_proj, v_proj, o_proj, gate_proj, up_proj, down_proj]
+
+# 모니터링
+wandb_project: skku-bias-llava-ov
+run_name: llava-ov-0.5b-lora
