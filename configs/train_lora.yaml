@@ -15,14 +15,14 @@ max_length: 4096       # anyres-9 이미지 토큰 확장 여유
 output_dir: outputs/llava_ov_lora
 
 # 학습 하이퍼파라미터 (H100 80GB 실측 튜닝)
-# 전체 데이터 실측: batch 16은 peak 77GB/80GB(95%, 무인 실행엔 위험), batch 32는 OOM.
-# effective(global) batch를 2^n(=32)으로 맞추기 위해 micro-batch 8 × accum 4 채택
-# (batch 8은 peak가 batch 12보다 낮아 안전 마진 충분).
+# 전체 데이터 실측: batch 16은 peak 77GB/80GB(95%), batch 32는 OOM.
+# effective(global) batch를 2^n(=32)으로 맞추되 처리량 위해 micro-batch 16 × accum 2 채택
+# (peak 95%로 마진은 적음 — OOM 시 micro-batch 8 × accum 4로 환원, expandable_segments로 단편화 완화).
 seed: 42
 num_train_epochs: 2
-per_device_train_batch_size: 8      # 안전 micro-batch(batch 16=95%는 위험)
-per_device_eval_batch_size: 8
-gradient_accumulation_steps: 4      # effective batch = 32 (= 2^5)
+per_device_train_batch_size: 16     # micro-batch 16(peak≈95%) — 처리량 위해 상향, OOM 시 8로 환원
+per_device_eval_batch_size: 16
+gradient_accumulation_steps: 2      # effective batch = 32 (= 2^5)
 learning_rate: 1.0e-4               # 2e-4는 warmup peak(step~6)에서 grad NaN 발산 → 1e-4로 하향
 warmup_ratio: 0.1                   # 0.03(짧음)은 lr 급상승 중 발산 → 0.1로 완만히
 weight_decay: 0.0
