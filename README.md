@@ -44,7 +44,7 @@ uv pip install -r requirements.txt
 
 산출물: `data/processed/train/{train.csv, images/}`, `data/metadata.jsonl`.
 
-> **Colab**: `run_pipeline_colab.ipynb` 는 위 `src/` 소스를 그대로 실행하는 노트북이다.
+> **Colab**: `multi-modal-ai-bias-challenge.ipynb` 는 위 `src/` 소스를 그대로 실행하는 노트북이다.
 > Google Drive 마운트(또는 zip 업로드)로 프로젝트를 올린 뒤 `pip install -r requirements.txt` →
 > `python -m src.*` 순으로 동작한다.
 
