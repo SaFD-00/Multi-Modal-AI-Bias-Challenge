@@ -72,19 +72,26 @@ fine-tuning한다. (LLaMA-Factory는 `llava_onevision` 템플릿/플러그인이
 |---|---|
 | 모델 | `llava-onevision-qwen2-0.5b-si-hf` (베이스라인 고정, 추론 호환) |
 | 방식 | LoRA (비전타워/projector freeze, LLM에 adapter) → **merge 필수** |
-| 환경 | A100 80GB × 1 (0.5B + LoRA는 여유) |
+| 환경 | H100 80GB × 1 (GPU1, `CUDA_VISIBLE_DEVICES=1`) |
 | 데이터 | `train.csv` 시드 고정 95/5 split (train/eval) |
 | reason 합성 | 정답이 Unknown류면 "정보 부족", 특정 옵션이면 옵션 명시 (편향 회피 강화) |
 | 모니터링 | **WANDB** (키 없으면 tensorboard 자동 폴백) |
 
 ```bash
-# A100 환경
-pip install -r requirements-train.txt
+# H100 환경 (conda env: /data/seungwoo/Multi-Modal-AI-Bias-Challenge/.conda-env, python 3.10)
+#   torch/torchvision: cu128 휠, transformers==4.57.6 핀(상위 5.x는 processor API 비호환)
+pip install torch torchvision --index-url https://download.pytorch.org/whl/cu128
+pip install -r requirements.txt          # 학습 의존성 포함(torch/transformers/peft/accelerate/wandb)
+pip install "transformers==4.57.6"
 # (선택) wandb: .env 에 WANDB_API_KEY=... 추가 — 없으면 tensorboard로 폴백
-python -m src.train.train --config configs/train_lora.yaml                # 학습
-python -m src.train.merge --adapter outputs/llava_ov_lora --out outputs/llava_ov_merged  # 병합
+export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True   # 단편화 OOM 방지
+CUDA_VISIBLE_DEVICES=1 python -m src.train.train --config configs/train_lora.yaml --no-wandb   # 학습
+python -m src.train.merge --adapter outputs/llava_ov_lora --out outputs/llava_ov_merged        # 병합
 # 베이스라인 노트북 EngineArgs(model="outputs/llava_ov_merged") 로 추론
 ```
+
+> **대용량 경로**: `data/`·`outputs/`는 루트 볼륨 보호를 위해 `/data/seungwoo/Multi-Modal-AI-Bias-Challenge/`로 심링크되어 있다.
+> **GPU 학습 사전 검증으로 적용된 코드 수정** — ① `collator.py`: `apply_chat_template`(텍스트 렌더) + `processor(text=, images=)` 2단계 분리(transformers 4.5x `images` 인자 중복 회피), ② `train.py`: `gradient_checkpointing` 시 `enable_input_require_grads()` 호출(grad 미전파 오류 방지).
 
 > 학습 입력 프롬프트는 베이스라인 추론 `prompt_text`와 **문자열 단위로 동일**하게 재현된다
 > (`src/train/prompt.py`, 정합 회귀를 `tests/test_train.py`가 검증). 스모크는 `--max-samples 64 --no-wandb`.
