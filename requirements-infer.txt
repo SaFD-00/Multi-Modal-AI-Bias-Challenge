@@ -1,0 +1,9 @@
+# 추론 전용 의존성 (제출 파일 생성: src.predict).
+# 학습 requirements.txt는 transformers==4.57.6 핀이라 vLLM과 충돌 가능 → 분리한다.
+# 기준 평가환경: RTX A6000 48GB, Python 3.10, CUDA 12.4, PyTorch 2.6.0, Ubuntu 20.04.
+# vllm 설치 시 호환 transformers/torch가 함께 고정되므로 별도 환경에서 설치할 것.
+vllm
+pandas
+pillow
+tqdm
+pydantic
