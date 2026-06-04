@@ -88,7 +88,7 @@ pip install "transformers==4.57.6"
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True   # 단편화 OOM 방지
 CUDA_VISIBLE_DEVICES=1 python -m src.train.train --config configs/train_lora.yaml --no-wandb   # 학습
 python -m src.train.merge --adapter outputs/llava_ov_lora --out outputs/llava_ov_merged        # 병합
-# 베이스라인 노트북 EngineArgs(model="outputs/llava_ov_merged") 로 추론
+# 추론·제출은 아래 "추론 및 제출"(src.predict) 참고
 ```
 
 > **대용량 경로**: `data/`·`outputs/`는 루트 볼륨 보호를 위해 `/data/seungwoo/Multi-Modal-AI-Bias-Challenge/`로 심링크되어 있다.
@@ -116,6 +116,26 @@ hold-out해 **"학습에서 안 본 편향 축"의 일반화**를 측정한다. 
 | `src/train/collator.py` | 멀티모달 collator + assistant 토큰만 학습(prompt/image 토큰 -100 마스킹) |
 | `src/train/train.py` | LoRA + HF Trainer + wandb |
 | `src/train/merge.py` | LoRA → base 병합(추론용 HF 체크포인트) |
+| `src/predict.py` | 병합모델 vLLM 추론 → 제출 CSV(`sample_id,label`) |
+
+## 추론 및 제출
+
+대회 1차 제출물(`output/submission.csv`, **`sample_id,label`**)을 만든다. 프롬프트/이미지
+전처리(img_size=224)는 `src/train/prompt.py`·`src/train/collator.py`를 재사용해 **학습과 동일**하다.
+최종 답변은 LLM이 JSON(`{"reason","answer_id"}`)을 **생성**하고 거기서 `answer_id`만 파싱한다(룰 매핑 아님).
+
+```bash
+# 추론 의존성은 분리 — vLLM은 학습의 transformers==4.57.6 핀과 충돌할 수 있음
+pip install -r requirements-infer.txt
+python -m src.predict --model outputs/llava_ov_merged \
+    --test-csv data/raw/test/test.csv --images-dir data/raw/test \
+    --out output/submission.csv --img-size 224
+```
+
+- **병합 필수**: vLLM은 멀티모달 LoRA 직접 로드가 어려워 `src.train.merge` 산출물(`outputs/llava_ov_merged`)을 로드한다.
+- **오프라인**: `src.predict`가 `HF_HUB_OFFLINE`/`TRANSFORMERS_OFFLINE`를 강제한다(외부 API/통신 금지 규칙).
+- **기준 평가환경**: RTX A6000 48GB, Python 3.10, CUDA 12.4, PyTorch 2.6.0 / 추론 ≤0.5s/샘플.
+- 스모크: `--max-samples 8 --out output/_smoke.csv` 로 소량 확인.
 
 ## 설정 (`config.yaml`)
 
