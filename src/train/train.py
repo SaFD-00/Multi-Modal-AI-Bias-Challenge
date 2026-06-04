@@ -76,6 +76,10 @@ def build_model_and_processor(cfg):
         task_type="CAUSAL_LM",
     )
     model = get_peft_model(model, lora)
+    # gradient_checkpointing + 동결 임베딩 조합에서 입력이 grad를 전파하도록 활성화
+    # (없으면 "element 0 of tensors does not require grad" 발생).
+    if cfg.get("gradient_checkpointing", True):
+        model.enable_input_require_grads()
     model.print_trainable_parameters()
     return model, processor
 

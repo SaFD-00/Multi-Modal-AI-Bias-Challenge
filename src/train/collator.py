@@ -72,20 +72,21 @@ class LlavaOVCollator:
         conv = build_conversation(item["context"], item["question"], item["answers"])
         target = build_target_json(item["answers"], item["label"], self.unknown_lexicon)
 
-        # prompt-only (assistant 생성 직전까지) → 프롬프트 토큰 길이 산출
-        prompt_ids = self.processor.apply_chat_template(
-            conv, add_generation_prompt=True, tokenize=True,
-            return_dict=True, return_tensors="pt", images=[image],
-        )["input_ids"][0]
+        # prompt-only (assistant 생성 직전까지) → 프롬프트 토큰 길이 산출.
+        # transformers 4.5x: apply_chat_template은 텍스트만 렌더(tokenize=False)하고,
+        # 이미지 바인딩은 processor(text=, images=)로 분리한다(images 인자 중복 회피).
+        prompt_text = self.processor.apply_chat_template(
+            conv, add_generation_prompt=True, tokenize=False)
+        prompt_ids = self.processor(
+            text=prompt_text, images=[image], return_tensors="pt")["input_ids"][0]
         prompt_len = int(prompt_ids.shape[0])
 
         # full (assistant 타깃 포함)
         full_conv = conv + [{"role": "assistant",
                              "content": [{"type": "text", "text": target}]}]
-        enc = self.processor.apply_chat_template(
-            full_conv, add_generation_prompt=False, tokenize=True,
-            return_dict=True, return_tensors="pt", images=[image],
-        )
+        full_text = self.processor.apply_chat_template(
+            full_conv, add_generation_prompt=False, tokenize=False)
+        enc = self.processor(text=full_text, images=[image], return_tensors="pt")
         input_ids = enc["input_ids"][0]
         pad_id = self.processor.tokenizer.pad_token_id
         labels = torch.tensor(
@@ -112,10 +113,21 @@ class LlavaOVCollator:
             [e["attention_mask"] for e in encoded], batch_first=True, padding_value=0)
         labels = pad_sequence(
             [e["labels"] for e in encoded], batch_first=True, padding_value=IGNORE_INDEX)
+        # anyres: 이미지마다 patch 수가 달라(num_patches) 그대로 stack 불가.
+        # 프로세서 배치 동작과 동일하게 patch 차원을 배치 최대값으로 zero-padding 후 stack.
+        # 모델은 image_sizes로 실제 patch 수를 계산해 패딩 patch를 무시한다.
+        pvs = [e["pixel_values"] for e in encoded]
+        max_patches = max(p.shape[0] for p in pvs)
+        padded_pvs = []
+        for p in pvs:
+            if p.shape[0] < max_patches:
+                pad = torch.zeros((max_patches - p.shape[0], *p.shape[1:]), dtype=p.dtype)
+                p = torch.cat([p, pad], dim=0)
+            padded_pvs.append(p)
         return {
             "input_ids": input_ids,
             "attention_mask": attention_mask,
             "labels": labels,
-            "pixel_values": torch.stack([e["pixel_values"] for e in encoded]),
+            "pixel_values": torch.stack(padded_pvs),
             "image_sizes": torch.stack([e["image_sizes"] for e in encoded]),
         }
