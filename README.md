@@ -35,11 +35,12 @@ uv pip install -r requirements.txt
 
 ```bash
 .venv/bin/python -m src.map_sbbench   # SB-Bench real split 다운로드(~12.3GB) + 이미지 저장
-.venv/bin/python -m pytest tests/ -q  # 순수 함수 48개 GREEN (데이터 31 + 학습 17)
+.venv/bin/python -m pytest tests/ -q  # 순수 함수 55개 GREEN (데이터 34 + 학습 21)
 .venv/bin/python -m src.augment_bbq   # 부족 셀 BBQ 보강 (GitHub JSONL)
 .venv/bin/python -m src.compose       # Unknown 재다양화/위치 균등 → train.csv
 .venv/bin/python -m src.metadata      # test 누수 제거 + 출처/라이선스 기록
 .venv/bin/python -m src.validate      # 스키마·분포·bias score·재현성·베이스라인 스모크
+.venv/bin/python -m src.validate --ood  # OOD(leave-axis-out) 3분할 무결성·분포 검증
 ```
 
 산출물: `data/processed/train/{train.csv, images/}`, `data/metadata.jsonl`.
@@ -73,7 +74,7 @@ fine-tuning한다. (LLaMA-Factory는 `llava_onevision` 템플릿/플러그인이
 | 모델 | `llava-onevision-qwen2-0.5b-si-hf` (베이스라인 고정, 추론 호환) |
 | 방식 | LoRA (비전타워/projector freeze, LLM에 adapter) → **merge 필수** |
 | 환경 | H100 80GB × 1 (GPU1, `CUDA_VISIBLE_DEVICES=1`) |
-| 데이터 | `train.csv` 시드 고정 95/5 split (train/eval) |
+| 데이터 | `train.csv` 시드 고정 split. OOD 검증은 `ood_axes` 축을 hold-out(leave-axis-out) |
 | reason 합성 | 정답이 Unknown류면 "정보 부족", 특정 옵션이면 옵션 명시 (편향 회피 강화) |
 | 모니터링 | **WANDB** (키 없으면 tensorboard 자동 폴백) |
 
@@ -96,10 +97,22 @@ python -m src.train.merge --adapter outputs/llava_ov_lora --out outputs/llava_ov
 > 학습 입력 프롬프트는 베이스라인 추론 `prompt_text`와 **문자열 단위로 동일**하게 재현된다
 > (`src/train/prompt.py`, 정합 회귀를 `tests/test_train.py`가 검증). 스모크는 `--max-samples 64 --no-wandb`.
 
+### OOD 검증셋 (leave-axis-out)
+
+Public/Private **Shake-up**(운영진 자체제작 Private) 설계에서 핵심 위험은 IID 과적합이 아니라 학습 분포의
+텍스트 shortcut 암기다. `config.yaml`의 `ood_axes`(기본 `Religion`·`Sexual_orientation`, 약 9%)를 통째로
+hold-out해 **"학습에서 안 본 편향 축"의 일반화**를 측정한다. `ood_axes`가 비면 기존 단일 IID val로 동작.
+
+- **학습**(`train.py`): OOD 활성 시 `eval_dataset={"in":…, "ood":…}`로 `eval_in_loss`·`eval_ood_loss`를 각각
+  로깅하고 **`eval_ood_loss` 기준 best 체크포인트**를 고른다 → IID eval_loss로 과적합 체크포인트를 고르는 함정 회피.
+- **검증**: `python -m src.validate --ood` — train / in-domain-val / ood-val 3분할의 무결성(sample_id 겹침=0,
+  OOD가 지정 축만 포함)과 축·극성 분포를 리포트.
+- 정본은 `config.yaml`의 `ood_axes` + `paths.metadata` (학습·검증 공유). 배경: `.claude/researchs/` epoch 분석 문서.
+
 | 학습 모듈 | 역할 |
 |---|---|
 | `src/train/prompt.py` | 베이스라인 동일 프롬프트 + reason 합성 + target JSON (추론 정합 단일 진실원) |
-| `src/train/dataset.py` | train.csv 로드 + 결정적 95/5 split |
+| `src/train/dataset.py` | train.csv 로드 + 결정적 split + leave-axis-out OOD 3분할 |
 | `src/train/collator.py` | 멀티모달 collator + assistant 토큰만 학습(prompt/image 토큰 -100 마스킹) |
 | `src/train/train.py` | LoRA + HF Trainer + wandb |
 | `src/train/merge.py` | LoRA → base 병합(추론용 HF 체크포인트) |
@@ -120,7 +133,7 @@ python -m src.train.merge --adapter outputs/llava_ov_lora --out outputs/llava_ov
 | T2 | `src/augment_bbq.py` | BBQ로 부족 셀 보강, 이미지는 동일 axis SB-Bench 재사용 |
 | T3 | `src/compose.py` ★ | Unknown 재다양화 + 위치 재셔플 + label 재매핑 + 비율 샘플링 |
 | T4 | `src/metadata.py` | test 누수 제거(정규화 해시) + 출처/라이선스 메타 |
-| T5 | `src/validate.py` | 스키마/분포/bias score/재현성 + 베이스라인 로더 호환 스모크 |
+| T5 | `src/validate.py` | 스키마/분포/bias score/재현성 + 베이스라인 스모크 · `--ood`: OOD 3분할 무결성 |
 
 중간 스키마(`mapped.jsonl`): `uid, source, license, axis, polarity, ambig, context, question,
 options, label, unknown_idx, unknown_text, image_ref, norm_key, meta`.
