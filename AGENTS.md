@@ -36,7 +36,7 @@ CUDA_VISIBLE_DEVICES=1 python -m src.train.train --config configs/train_lora.yam
 python -m src.train.merge --adapter outputs/llava_ov_lora --out outputs/llava_ov_merged        # 추론용 병합
 ```
 
-> 데이터 구축은 GPU 불필요. 학습은 H100(GPU1) conda env에서 실행. `requirements.txt`가 학습 의존성까지 포함(별도 `requirements-train.txt` 없음). `data/`·`outputs/`는 `/data`로 심링크. 하이퍼파라미터는 H100 80GB 실측 기준 batch 16/accum 2(eff 32)/lr 2e-4 (batch 32는 vocab logits로 OOM).
+> 데이터 구축은 GPU 불필요. 학습은 H100(GPU1) conda env에서 실행. `requirements.txt`가 학습 의존성까지 포함(별도 `requirements-train.txt` 없음). `data/`·`outputs/`는 `/data`로 심링크. 하이퍼파라미터는 H100 80GB 실측 기준 micro-batch 8/accum 4(effective 32 = 2^5)/lr 2e-4 (micro-batch 16은 peak 95%로 위험, 32는 vocab logits로 OOM).
 
 > **OOD 검증(leave-axis-out)** — Public/Private Shake-up 위험(텍스트 shortcut 암기)에 대응해 `config.yaml`의 `ood_axes`(기본 Religion·Sexual_orientation)를 통째로 hold-out한다. 학습은 `eval_in_loss`/`eval_ood_loss`를 각각 로깅하고 **`eval_ood_loss` 기준 best 체크포인트**를 고른다(IID eval_loss 함정 회피). `src.validate --ood`로 3분할 무결성 검증. 정본은 `config.yaml`의 `ood_axes` + `paths.metadata`(학습·검증 공유), `ood_axes: []`면 기존 단일 IID val.
 
