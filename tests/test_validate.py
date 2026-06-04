@@ -9,6 +9,7 @@ from src.validate import (
     build_baseline_prompt,
     check_distribution,
     check_schema,
+    check_split_integrity,
     compute_bias_scores,
 )
 
@@ -77,6 +78,37 @@ def test_compute_bias_scores_known_case():
 def test_compute_bias_scores_empty_safe():
     s = compute_bias_scores([], [], [], [])
     assert s["s_DIS"] == 0.0 and s["s_AMB"] == 0.0
+
+
+def _ood_splits():
+    """train/in_val/ood 3분할 + meta. ood 축 = Religion만."""
+    def mk(ids, axis):
+        return [{"sample_id": sid} for sid in ids], {sid: {"axis": axis} for sid in ids}
+    tr, m1 = mk([f"TRAIN_{i:06d}" for i in range(0, 80)], "Age")
+    iv, m2 = mk([f"TRAIN_{i:06d}" for i in range(80, 90)], "Age")
+    od, m3 = mk([f"TRAIN_{i:06d}" for i in range(90, 100)], "Religion")
+    meta = {**m1, **m2, **m3}
+    return tr, iv, od, meta
+
+
+def test_split_integrity_pass():
+    tr, iv, od, meta = _ood_splits()
+    assert check_split_integrity(tr, iv, od, meta, ["Religion"]) == []
+
+
+def test_split_integrity_detects_overlap():
+    tr, iv, od, meta = _ood_splits()
+    tr2 = tr + [od[0]]  # OOD 샘플이 train에도 → 겹침 + 축 누출
+    errs = check_split_integrity(tr2, iv, od, meta, ["Religion"])
+    assert any("겹침" in e for e in errs)
+    assert any("누출" in e for e in errs)
+
+
+def test_split_integrity_detects_foreign_axis_in_ood():
+    tr, iv, od, meta = _ood_splits()
+    meta[od[0]["sample_id"]] = {"axis": "Age"}  # OOD에 비-OOD 축 섞임
+    errs = check_split_integrity(tr, iv, od, meta, ["Religion"])
+    assert any("ood_axes 외 축" in e for e in errs)
 
 
 def test_normalize_text_and_leak_key():

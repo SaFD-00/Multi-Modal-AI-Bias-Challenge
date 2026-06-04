@@ -101,6 +101,34 @@ def compute_bias_scores(
     }
 
 
+def check_split_integrity(train, in_val, ood, meta, ood_axes) -> list[str]:
+    """leave-axis-out 3분할 무결성 검사. 에러 리스트 반환(빈 리스트=통과).
+
+    (1) 세 분할 sample_id 교집합=0 + 합집합=전체, (2) OOD가 ood_axes 축만 포함,
+    (3) train/in_val에 OOD 축 누출 없음 을 확인한다.
+    """
+    errors: list[str] = []
+    ids = [{r["sample_id"] for r in s} for s in (train, in_val, ood)]
+    names = ["train", "in_val", "ood"]
+    for i in range(3):
+        for j in range(i + 1, 3):
+            inter = ids[i] & ids[j]
+            if inter:
+                errors.append(f"{names[i]}∩{names[j]} sample_id 겹침 {len(inter)}건")
+    total = len(train) + len(in_val) + len(ood)
+    if len(ids[0] | ids[1] | ids[2]) != total:
+        errors.append(f"분할 합집합 {len(ids[0] | ids[1] | ids[2])} != 합계 {total} (중복/누락)")
+    ood_set = set(ood_axes)
+    bad = [r["sample_id"] for r in ood if meta.get(r["sample_id"], {}).get("axis") not in ood_set]
+    if bad:
+        errors.append(f"OOD에 ood_axes 외 축 {len(bad)}건 (예: {bad[:3]})")
+    leak = [r["sample_id"] for r in (train + in_val)
+            if meta.get(r["sample_id"], {}).get("axis") in ood_set]
+    if leak:
+        errors.append(f"train/in_val에 OOD 축 누출 {len(leak)}건 (예: {leak[:3]})")
+    return errors
+
+
 def hash_artifact(path: Path) -> str:
     """파일 바이트의 sha256 (재현성 검증)."""
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
@@ -184,5 +212,66 @@ def run(config: dict | None = None) -> None:
     print("[validate] ALL PASS")
 
 
+def run_ood(config: dict | None = None) -> None:
+    """in-domain·OOD leave-axis-out 3분할의 무결성·스키마·분포 검증.
+
+    config.yaml의 ood_axes(정본)로 train.csv를 train/in-domain-val/ood-val로 재현 분할하고,
+    분할 무결성 + split별 스키마 + 축/극성 분포를 리포트한다. 학습이 OOD 기준으로 best
+    체크포인트를 고를 수 있는 전제(분할이 깨끗한지)를 보장한다.
+    """
+    import pandas as pd
+
+    from src.train.dataset import load_metadata, split_train_val_ood
+
+    cfg = config or load_config()
+    lexicon = cfg["unknown_lexicon"]
+    ood_axes = cfg.get("ood_axes") or []
+    train_csv = resolve_path(cfg, "train_csv")
+    meta_path = resolve_path(cfg, "metadata")
+
+    if not ood_axes:
+        print("[validate-ood] config.yaml의 ood_axes가 비어 OOD 비활성. 축을 지정하세요.")
+        return
+    if not meta_path.exists():
+        raise SystemExit(f"[validate-ood] metadata 없음: {meta_path} (먼저 `python -m src.metadata`)")
+
+    df = pd.read_csv(train_csv)
+    rows = df.to_dict("records")
+    for r in rows:
+        r["label"] = int(r["label"])
+    meta = load_metadata(meta_path)
+    train, in_val, ood = split_train_val_ood(rows, meta, seed=cfg["seed"], ood_axes=ood_axes)
+
+    errors: list[str] = []
+    errors += [f"[integrity] {e}" for e in check_split_integrity(train, in_val, ood, meta, ood_axes)]
+    for name, split in (("train", train), ("in_val", in_val), ("ood", ood)):
+        errors += [f"[{name}/schema] {e}" for e in check_schema(split, lexicon)]
+
+    print(f"[validate-ood] ood_axes={ood_axes}")
+    print(f"[validate-ood] train={len(train)} in_val={len(in_val)} ood={len(ood)} (전체 {len(rows)})")
+    for name, split in (("train", train), ("in_val", in_val), ("ood", ood)):
+        ax = Counter(meta.get(r["sample_id"], {}).get("axis") for r in split)
+        pol = Counter(meta.get(r["sample_id"], {}).get("polarity") for r in split)
+        print(f"  {name:7s} 축={dict(ax.most_common())} 극성={dict(pol)}")
+    if errors:
+        for e in errors[:30]:
+            print("  FAIL", e)
+        raise SystemExit(f"[validate-ood] {len(errors)}개 검증 실패")
+    print("[validate-ood] ALL PASS")
+
+
+def main() -> None:
+    import argparse
+
+    ap = argparse.ArgumentParser(description="train.csv 검증 (데이터 무결성)")
+    ap.add_argument("--ood", action="store_true",
+                    help="in-domain·OOD leave-axis-out 3분할 무결성/분포 검증")
+    args = ap.parse_args()
+    if args.ood:
+        run_ood()
+    else:
+        run()
+
+
 if __name__ == "__main__":
-    run()
+    main()
