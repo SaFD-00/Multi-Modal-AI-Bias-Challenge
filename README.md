@@ -148,8 +148,8 @@ hold-out해 **"학습에서 안 본 편향 축"의 일반화**를 측정한다. 
 최종 답변은 LLM이 JSON(`{"reason","answer_id"}`)을 **생성**하고 거기서 `answer_id`만 파싱한다(룰 매핑 아님).
 
 ```bash
-# 추론 의존성은 분리 — vLLM은 학습의 transformers==4.57.6 핀과 충돌할 수 있음
-pip install -r requirements-infer.txt
+# 의존성은 requirements.txt로 통합 — ⚠️ vLLM은 학습 transformers 핀과 충돌 가능하니 추론은 별도 venv 권장
+pip install -r requirements.txt        # 또는 별도 venv에서: pip install vllm pydantic
 python -m src.predict --model outputs/llava_ov_merged \
     --test-csv data/raw/test/test.csv --images-dir data/raw/test \
     --out output/submission.csv --img-size 224
