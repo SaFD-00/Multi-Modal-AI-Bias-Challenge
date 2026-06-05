@@ -81,7 +81,7 @@ fine-tuning한다. (LLaMA-Factory는 `llava_onevision` 템플릿/플러그인이
 |---|---|
 | 모델 | `llava-onevision-qwen2-0.5b-si-hf` (베이스라인 고정, 추론 호환) |
 | 방식 | LoRA (비전타워/projector freeze, LLM에 adapter) → **merge 필수** |
-| 환경 | H100 80GB × 1 (GPU1, `CUDA_VISIBLE_DEVICES=1`) |
+| 환경 | A100/H100 80GB 또는 RTX5090, 1~2 GPU — `.env`의 `GPU_TYPE`/`GPU_COUNT`로 선택 |
 | 데이터 | `train.csv` 시드 고정 split. OOD 검증은 `ood_axes` 축을 hold-out(leave-axis-out) |
 | reason 합성 | 정답이 Unknown류면 "정보 부족", 특정 옵션이면 옵션 명시 (편향 회피 강화) |
 | 모니터링 | **WANDB** (키 없으면 tensorboard 자동 폴백) |
@@ -93,11 +93,25 @@ pip install torch torchvision --index-url https://download.pytorch.org/whl/cu128
 pip install -r requirements.txt          # 학습 의존성 포함(torch/transformers/peft/accelerate/wandb)
 pip install "transformers==4.57.6"
 # (선택) wandb: .env 에 WANDB_API_KEY=... 추가 — 없으면 tensorboard로 폴백
-export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True   # 단편화 OOM 방지
-CUDA_VISIBLE_DEVICES=1 python -m src.train.train --config configs/train_lora.yaml --no-wandb   # 학습
-python -m src.train.merge --adapter outputs/llava_ov_lora --out outputs/llava_ov_merged        # 병합
+
+# 학습 — GPU 프로파일 런처(.env의 GPU_TYPE/GPU_COUNT를 읽어 batch/dtype/accum·torchrun 자동 구성)
+python -m src.train.launch --no-wandb                                # ← 권장. global batch 64 유지
+python -m src.train.merge --adapter outputs/llava_ov_lora --out outputs/llava_ov_merged   # 병합
 # 추론·제출은 아래 "추론 및 제출"(src.predict) 참고
 ```
+
+**GPU 프로파일 (`.env` 설정 → `src.train.launch`)** — 어떤 조합이든 **global(effective) batch는 64로 고정**:
+
+| `GPU_TYPE` | `GPU_COUNT` | per-device × accum × gpu | dtype | 실행 |
+|---|---|---|---|---|
+| `A100`/`H100` (80GB) | 1 | 16 × 4 × 1 = 64 | fp32 | 직접 |
+| `A100`/`H100` (80GB) | 2 | 16 × 2 × 2 = 64 | fp32 | torchrun DDP |
+| `RTX5090` (32GB) | 1 | 4 × 16 × 1 = 64 | fp32 | 직접 |
+| `RTX5090` (32GB) | 2 | 4 × 8 × 2 = 64 | fp32 | torchrun DDP |
+
+- `.env`: `GPU_TYPE`(A100/H100/RTX5090), `GPU_COUNT`(1/2), `GPU_DEVICES`(선택, 예 `"1"`·`"0,1"`). 예시는 `.env.example`.
+- 런처가 `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True`·`CUDA_VISIBLE_DEVICES`를 자동 설정하고, 80GB는 fp32 batch 16(실측 peak≈75GB), 5090(32GB)은 fp32 batch 4로 OOM을 회피한다.
+- 런처 없이 `python -m src.train.train --config ...` 직접 실행하면 `configs/train_lora.yaml` 값 그대로(하위호환).
 
 > **대용량 경로**: `data/`·`outputs/`는 루트 볼륨 보호를 위해 `/data/seungwoo/Multi-Modal-AI-Bias-Challenge/`로 심링크되어 있다.
 > **GPU 학습 사전 검증으로 적용된 코드 수정** — ① `collator.py`: `apply_chat_template`(텍스트 렌더) + `processor(text=, images=)` 2단계 분리(transformers 4.5x `images` 인자 중복 회피), ② `train.py`: `gradient_checkpointing` 시 `enable_input_require_grads()` 호출(grad 미전파 오류 방지).
@@ -122,7 +136,8 @@ hold-out해 **"학습에서 안 본 편향 축"의 일반화**를 측정한다. 
 | `src/train/prompt.py` | 베이스라인 동일 프롬프트 + reason 합성 + target JSON (추론 정합 단일 진실원) |
 | `src/train/dataset.py` | train.csv 로드 + 결정적 split + leave-axis-out OOD 3분할 |
 | `src/train/collator.py` | 멀티모달 collator + assistant 토큰만 학습(prompt/image 토큰 -100 마스킹) |
-| `src/train/train.py` | LoRA + HF Trainer + wandb |
+| `src/train/train.py` | LoRA + HF Trainer + wandb (런처 주입 batch/dtype override 지원) |
+| `src/train/launch.py` | `.env`(GPU_TYPE/GPU_COUNT) → batch/dtype/accum·torchrun 자동 구성, global batch 64 고정 |
 | `src/train/merge.py` | LoRA → base 병합(추론용 HF 체크포인트) |
 | `src/predict.py` | 병합모델 vLLM 추론 → 제출 CSV(`sample_id,label`) |
 
