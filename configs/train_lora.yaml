@@ -14,15 +14,15 @@ max_length: 4096       # anyres-9 이미지 토큰 확장 여유
 # 출력
 output_dir: outputs/llava_ov_lora
 
-# 학습 하이퍼파라미터 (H100 80GB 실측 튜닝)
-# effective(global) batch는 2^n(=32) 고정. micro-batch를 2배(8→16)로 올려 처리량 확보, accum 4→2.
-# ⚠️ 메모리 주의: fp32(메모리≈2배) 기준 micro-batch 8이 peak≈95%였음 → micro-batch 16은 OOM 위험 큼.
-# OOM 시 micro-batch 8 × accum 4로 환원하거나 bf16 복귀 검토. PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True 필수.
+# 학습 하이퍼파라미터 (80GB 기준). GPU별 batch/accum은 src.train.launch가 .env로 자동 설정 →
+# 직접 실행(src.train.train) 시의 기본값이며, launcher 사용 시 override된다.
+# effective(global) batch = 64 고정. 80GB fp32는 micro-batch 16 × accum 4 (peak≈75GB).
+# ⚠️ PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True 필수. 5090(32GB)은 launcher가 batch 4×accum 16으로.
 seed: 42
 num_train_epochs: 2
-per_device_train_batch_size: 16     # micro-batch 2배(8→16) — effective batch 32 유지
+per_device_train_batch_size: 16     # 80GB fp32 micro-batch (launcher가 GPU별 override)
 per_device_eval_batch_size: 16
-gradient_accumulation_steps: 2      # effective batch = 32 (= 2^5), accum 절반(4→2)으로 global 유지
+gradient_accumulation_steps: 4      # effective batch = 64 (16×4), launcher가 GPU별 override
 learning_rate: 1.0e-4               # 2e-4는 warmup peak(step~6)에서 grad NaN 발산 → 1e-4로 하향
 warmup_ratio: 0.1                   # 0.03(짧음)은 lr 급상승 중 발산 → 0.1로 완만히
 weight_decay: 0.01                  # logit explosion 억제(0.0은 NaN saturation 무방비)

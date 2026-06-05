@@ -108,6 +108,17 @@ def main():
     root = project_root()
     cfg = load_train_config(_abs(root, args.config))
 
+    # GPU 프로파일 런처(src.train.launch)가 .env(GPU_TYPE/GPU_COUNT) 기반으로 주입한 override.
+    # 직접 실행 시엔 env 미설정 → yaml 값 그대로 사용(하위호환). global batch는 런처가 32로 맞춘다.
+    if os.environ.get("TRAIN_PER_DEVICE_BATCH"):
+        b = int(os.environ["TRAIN_PER_DEVICE_BATCH"])
+        cfg["per_device_train_batch_size"] = b
+        cfg["per_device_eval_batch_size"] = b
+    if os.environ.get("TRAIN_ACCUM"):
+        cfg["gradient_accumulation_steps"] = int(os.environ["TRAIN_ACCUM"])
+    if os.environ.get("TRAIN_BF16"):
+        cfg["bf16"] = os.environ["TRAIN_BF16"] == "1"
+
     # 데이터 레벨 설정(unknown_lexicon, ood_axes, metadata 경로)은 config.yaml이 정본.
     unknown_lexicon, ood_axes, meta_rel = [], [], None
     cfg_yaml = root / "config.yaml"
