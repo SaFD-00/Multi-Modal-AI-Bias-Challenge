@@ -15,20 +15,20 @@ max_length: 4096       # anyres-9 이미지 토큰 확장 여유
 output_dir: outputs/llava_ov_lora
 
 # 학습 하이퍼파라미터 (H100 80GB 실측 튜닝)
-# 전체 데이터 실측: batch 16은 peak 77GB/80GB(95%), batch 32는 OOM.
-# effective(global) batch를 2^n(=32)으로 맞추되 처리량 위해 micro-batch 16 × accum 2 채택
-# (peak 95%로 마진은 적음 — OOM 시 micro-batch 8 × accum 4로 환원, expandable_segments로 단편화 완화).
+# effective(global) batch는 2^n(=32) 고정. micro-batch를 2배(8→16)로 올려 처리량 확보, accum 4→2.
+# ⚠️ 메모리 주의: fp32(메모리≈2배) 기준 micro-batch 8이 peak≈95%였음 → micro-batch 16은 OOM 위험 큼.
+# OOM 시 micro-batch 8 × accum 4로 환원하거나 bf16 복귀 검토. PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True 필수.
 seed: 42
 num_train_epochs: 2
-per_device_train_batch_size: 16     # micro-batch 16(peak≈95%) — 처리량 위해 상향, OOM 시 8로 환원
+per_device_train_batch_size: 16     # micro-batch 2배(8→16) — effective batch 32 유지
 per_device_eval_batch_size: 16
-gradient_accumulation_steps: 2      # effective batch = 32 (= 2^5)
+gradient_accumulation_steps: 2      # effective batch = 32 (= 2^5), accum 절반(4→2)으로 global 유지
 learning_rate: 1.0e-4               # 2e-4는 warmup peak(step~6)에서 grad NaN 발산 → 1e-4로 하향
 warmup_ratio: 0.1                   # 0.03(짧음)은 lr 급상승 중 발산 → 0.1로 완만히
 weight_decay: 0.01                  # logit explosion 억제(0.0은 NaN saturation 무방비)
 lr_scheduler_type: cosine
 logging_steps: 10
-bf16: true
+bf16: false                         # bf16 forward에서 logit overflow→loss=nan 발산 3회 → fp32로 수치 안정
 gradient_checkpointing: true
 
 # LoRA (LLM에만 적용, 비전타워/projector freeze)
