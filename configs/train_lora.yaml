@@ -25,7 +25,7 @@ per_device_eval_batch_size: 16
 gradient_accumulation_steps: 2      # effective batch = 32 (= 2^5)
 learning_rate: 1.0e-4               # 2e-4는 warmup peak(step~6)에서 grad NaN 발산 → 1e-4로 하향
 warmup_ratio: 0.1                   # 0.03(짧음)은 lr 급상승 중 발산 → 0.1로 완만히
-weight_decay: 0.0
+weight_decay: 0.01                  # logit explosion 억제(0.0은 NaN saturation 무방비)
 lr_scheduler_type: cosine
 logging_steps: 10
 bf16: true

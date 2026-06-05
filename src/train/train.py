@@ -86,6 +86,12 @@ def build_model_and_processor(cfg):
     # (없으면 "element 0 of tensors does not require grad" 발생).
     if cfg.get("gradient_checkpointing", True):
         model.enable_input_require_grads()
+    # NaN-guard: 특정 배치가 bf16 overflow로 grad에 nan/inf를 내도 그 값만 유한값으로 치환한다
+    # (해당 step을 사실상 skip). max_grad_norm은 nan>1.0=False라 발산을 못 막으므로, 첫 오염이
+    # weight로 전파돼 loss=0/grad_norm=nan으로 영구 고착되는 연쇄를 여기서 끊는다.
+    for p in model.parameters():
+        if p.requires_grad:
+            p.register_hook(lambda g: torch.nan_to_num(g, nan=0.0, posinf=1e4, neginf=-1e4))
     model.print_trainable_parameters()
     return model, processor
 
