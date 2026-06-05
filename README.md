@@ -5,15 +5,23 @@ DACON 236722용 학습 데이터 자체 구축 파이프라인. 이미지+contex
 
 ## 전략
 
-하이브리드: **SB-Bench MCQ 실사**(분포 정합 주력) + **BBQ 원본 텍스트**(9축·규모 보강).
+하이브리드: **SB-Bench MCQ 실사**(분포 정합 주력) + **BBQ 원본 텍스트**(9축·규모 보강) +
+**FairFace·MMBias 외부 이미지**(BBQ 행 이미지 다양화 + 라이선스 정화).
 
 | 소스 | 라이선스 | 역할 |
 |---|---|---|
-| SB-Bench (`ucf-crcv/SB-Bench`, `real` split) | **CC BY-NC 4.0** (비상업) | 실사 이미지 + MCQ |
-| BBQ (`nyu-mll/BBQ`, GitHub JSONL) | CC-BY-4.0 | 9축×ambig/disambig×polarity 부족 셀 보강 |
+| SB-Bench (`ucf-crcv/SB-Bench`, `real` split) | **CC BY-NC 4.0** (비상업) | 실사 이미지 + MCQ (주력) |
+| BBQ (`nyu-mll/BBQ`, GitHub JSONL) | CC-BY-4.0 | 9축×ambig/disambig×polarity 부족 셀 보강 (텍스트) |
+| FairFace (`HuggingFaceM4/FairFace`) | **CC-BY-4.0** | BBQ Age/Gender/Race/Intersectional 행 이미지 (균형 얼굴) |
+| MMBias (`sepehrjng92/MMBias`, GitHub zip) | **MIT** | BBQ Religion/Sexual_orientation/Nationality/Disability 행 이미지 |
 
-> ⚠️ **SB-Bench는 CC BY-NC 4.0(비상업)**. 비상업 학술 대회 용도로만 사용하며, 전 샘플의
-> 출처/라이선스를 `data/metadata.jsonl`에 기록한다(7/10 코드 검증 대비).
+> **이미지 출처 분리**: BBQ 텍스트 행은 기존에 동일 axis SB-Bench(NC) 이미지를 재사용(14,578장
+> 중복 큼)했으나, 이제 FairFace(CC-BY)·MMBias(MIT)를 **우선** 결합한다 → (1) 이미지 다양성↑
+> (2) OOD 축(Religion/Sexual_orientation) 실이미지 확보 (3) BBQ 행을 CC-BY/MIT만으로 구성(NC 의존 제거).
+> 외부에 없는 축(SES/Physical_appearance)만 SB-Bench로 폴백. `external_images.enabled=false`면 비활성.
+
+> ⚠️ **SB-Bench는 CC BY-NC 4.0(비상업)**. 텍스트·이미지 출처/라이선스를 각각 `data/metadata.jsonl`에
+> 분리 기록하며(`text_source/image_source`, `is_nc`는 둘 중 하나라도 NC면 True), 7/10 코드 검증에 대비한다.
 
 ## 사전 준비
 
@@ -36,7 +44,7 @@ uv pip install -r requirements.txt
 ```bash
 .venv/bin/python -m src.map_sbbench   # SB-Bench real split 다운로드(~12.3GB) + 이미지 저장
 .venv/bin/python -m pytest tests/ -q  # 순수 함수 55개 GREEN (데이터 34 + 학습 21)
-.venv/bin/python -m src.augment_bbq   # 부족 셀 BBQ 보강 (GitHub JSONL)
+.venv/bin/python -m src.augment_bbq   # 부족 셀 BBQ 보강 + FairFace/MMBias 이미지 결합(최초 1회 다운로드)
 .venv/bin/python -m src.compose       # Unknown 재다양화/위치 균등 → train.csv
 .venv/bin/python -m src.metadata      # test 누수 제거 + 출처/라이선스 기록
 .venv/bin/python -m src.validate      # 스키마·분포·bias score·재현성·베이스라인 스모크
@@ -141,6 +149,7 @@ python -m src.predict --model outputs/llava_ov_merged \
 
 - `seed`: 재현성 시드(42)
 - `safe_only`: `true`면 SB-Bench 제외, BBQ만으로 구축(라이선스 안전 모드)
+- `external_images`: BBQ 행에 FairFace(CC-BY)·MMBias(MIT) 이미지 결합 — `enabled`, `fairface_max`(저장 얼굴 수)
 - `target_per_cell`: 셀(9축×ambig/disambig×2polarity)당 상한 — 규모 제어 (현재 2400 → ~45k)
 - `unknown_distribution`: `proportional`(test 관측 비례) | `uniform`
 - `unknown_lexicon`: test 관측 Unknown 표현 10종(정본)
@@ -150,13 +159,14 @@ python -m src.predict --model outputs/llava_ov_merged \
 | 단계 | 모듈 | 역할 |
 |---|---|---|
 | T1 | `src/map_sbbench.py` | SB-Bench → 중간 스키마 `mapped.jsonl`, 이미지 저장, ambig 휴리스틱 도출 |
-| T2 | `src/augment_bbq.py` | BBQ로 부족 셀 보강, 이미지는 동일 axis SB-Bench 재사용 |
+| T2 | `src/augment_bbq.py` | BBQ로 부족 셀 보강 + 외부 이미지 풀(FairFace/MMBias) 우선 결합, SB-Bench 폴백 |
+| T2' | `src/external_images.py` | FairFace(CC-BY)·MMBias(MIT) → 축별 이미지 풀 `{axis: [(ref, source, license)]}` |
 | T3 | `src/compose.py` ★ | Unknown 재다양화 + 위치 재셔플 + label 재매핑 + 비율 샘플링 |
-| T4 | `src/metadata.py` | test 누수 제거(정규화 해시) + 출처/라이선스 메타 |
+| T4 | `src/metadata.py` | test 누수 제거(정규화 해시) + 텍스트·이미지 출처/라이선스 분리 메타 |
 | T5 | `src/validate.py` | 스키마/분포/bias score/재현성 + 베이스라인 스모크 · `--ood`: OOD 3분할 무결성 |
 
 중간 스키마(`mapped.jsonl`): `uid, source, license, axis, polarity, ambig, context, question,
-options, label, unknown_idx, unknown_text, image_ref, norm_key, meta`.
+options, label, unknown_idx, unknown_text, image_ref, image_source, image_license, norm_key, meta`.
 
 ## 검증 성공 기준
 

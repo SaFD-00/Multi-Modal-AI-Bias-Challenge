@@ -4,6 +4,13 @@ seed: 42
 # 구축 모드: false=하이브리드(SB-Bench 주력+BBQ 보강), true=안전모드(BBQ+검색만)
 safe_only: false
 
+# 외부 이미지 소스: BBQ 행에 FairFace(CC-BY)·MMBias(MIT) 이미지를 결합.
+# SB-Bench(CC-BY-NC) 재사용을 대체 → 다양성↑ + OOD 축 이미지 확보 + 라이선스 정화.
+external_images:
+  enabled: true
+  fairface_max: 10000       # 저장할 FairFace 얼굴 수 (Age/Gender/Race/Intersectional 공용 풀)
+  fairface_config: "0.25"   # FairFace 변형(0.25=여백 적은 크롭)
+
 # 규모: 셀(9축 × ambig/disambig × 2 polarity ≈ 36셀)당 상한
 # 2400(~45K) → 4000: SB-Bench real 최대 포함 + BBQ(58K 여유) 보강 확대로 데이터 양·다양성↑.
 target_per_cell: 4000
@@ -54,6 +61,8 @@ distribution_tolerance: 0.05
 paths:
   sb_bench_dir: data/external/sb_bench
   bbq_dir: data/external/bbq
+  fairface_dir: data/external/fairface
+  mmbias_dir: data/external/mmbias
   mapped: data/interim/mapped.jsonl
   train_csv: data/processed/train/train.csv
   train_images: data/processed/train/images
@@ -65,3 +74,5 @@ datasets:
   sb_bench: ucf-crcv/SB-Bench
   sb_split: real          # 실사 이미지 split (대회 test 분포 정합). 'synthetic' 제외.
   bbq: nyu-mll/BBQ        # 실제 로드는 GitHub raw JSONL (augment_bbq.BBQ_RAW_BASE)
+  fairface: HuggingFaceM4/FairFace   # CC-BY-4.0 균형 얼굴 (age/gender/race)
+  # MMBias(MIT)는 GitHub raw zip 직접 로드 (external_images.MMBIAS_RAW_BASE)

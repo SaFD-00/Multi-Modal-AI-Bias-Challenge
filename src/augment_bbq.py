@@ -12,11 +12,13 @@ from pathlib import Path
 
 from src.common import (
     LICENSE_BBQ,
+    LICENSE_SB,
     derive_rng,
     leak_key,
     load_config,
     resolve_path,
 )
+from src.external_images import build_external_pool
 from src.map_sbbench import canon_axis
 
 
@@ -76,6 +78,8 @@ def map_bbq_row(row: dict) -> dict | None:
         "unknown_idx": unk_idx,
         "unknown_text": options[unk_idx],
         "image_ref": None,
+        "image_source": None,
+        "image_license": None,
         "norm_key": leak_key(context, question),
         "meta": {"orig_id": qid, "bbq_category": row.get("category")},
     }
@@ -91,23 +95,36 @@ def cells_needed(current_counts: dict, target_per_cell: int) -> dict:
 
 
 def build_image_pool(records: list[dict]) -> dict:
-    """기존(SB-Bench) 레코드에서 axis별 이미지 경로 풀 구성."""
-    pool: dict[str, list[str]] = defaultdict(list)
+    """기존(SB-Bench) 레코드에서 axis별 이미지 풀 구성. 항목=(image_ref, source, license)."""
+    pool: dict[str, list] = defaultdict(list)
     for r in records:
         if r.get("image_ref"):
-            pool[r["axis"]].append(r["image_ref"])
+            pool[r["axis"]].append((
+                r["image_ref"],
+                r.get("image_source", "sb-bench"),
+                r.get("image_license", LICENSE_SB),
+            ))
     return pool
 
 
-def pair_image_for_bbq(record: dict, image_pool: dict, rng: random.Random) -> str | None:
-    """동일 axis SB-Bench 이미지 재사용 (없으면 전체 풀에서, 그것도 없으면 None)."""
-    candidates = image_pool.get(record["axis"])
-    if not candidates:
-        flat = [p for ps in image_pool.values() for p in ps]
-        candidates = flat or None
-    if not candidates:
-        return None
-    return rng.choice(candidates)
+def pair_image_for_bbq(
+    record: dict, ext_pool: dict, sb_pool: dict, rng: random.Random
+) -> tuple | None:
+    """BBQ 행에 이미지 결합. (image_ref, source, license) 또는 None 반환.
+
+    우선순위: 동일 axis 외부(FairFace/MMBias) → 동일 axis SB-Bench →
+    외부 전체 → SB-Bench 전체. 외부를 앞세워 다양성·라이선스 정화를 동시 달성.
+    """
+    axis = record["axis"]
+    for pool in (ext_pool, sb_pool):
+        cands = pool.get(axis)
+        if cands:
+            return rng.choice(cands)
+    for pool in (ext_pool, sb_pool):
+        flat = [c for cs in pool.values() for c in cs]
+        if flat:
+            return rng.choice(flat)
+    return None
 
 
 # --- I/O ---
@@ -157,8 +174,10 @@ def run(config: dict | None = None) -> None:
         existing = [json.loads(l) for l in mapped_path.read_text(encoding="utf-8").splitlines() if l.strip()]
 
     counts: Counter = Counter(cell_key(r) for r in existing)
-    image_pool = build_image_pool(existing)
+    sb_pool = build_image_pool(existing)
     safe_only = cfg.get("safe_only", False)
+    # 외부 이미지 풀(FairFace CC-BY + MMBias MIT)을 한 번만 받아 BBQ 행에 결합.
+    ext_pool = {} if safe_only else build_external_pool(cfg, resolve_path(cfg, "train_images"))
 
     bbq_rows = load_bbq(cfg)
     if not bbq_rows:
@@ -176,9 +195,11 @@ def run(config: dict | None = None) -> None:
             ck = cell_key(rec)
             if counts[ck] >= target:  # 셀 충족 → 스킵
                 continue
-            # 이미지 결합 (safe_only면 검색 경로지만 풀이 없으면 None 허용)
+            # 이미지 결합: 외부(FairFace/MMBias) 우선, SB-Bench 폴백 (safe_only면 생략)
             if not safe_only:
-                rec["image_ref"] = pair_image_for_bbq(rec, image_pool, rng)
+                ref = pair_image_for_bbq(rec, ext_pool, sb_pool, rng)
+                if ref:
+                    rec["image_ref"], rec["image_source"], rec["image_license"] = ref
             f.write(json.dumps(rec, ensure_ascii=False) + "\n")
             counts[ck] += 1
             seen_keys.add(rec["norm_key"])

@@ -32,15 +32,26 @@ def filter_leaks(records: list[dict], test_keyset: set[str]) -> tuple[list[dict]
 
 
 def make_metadata_row(rec: dict, sample_id: str) -> dict:
-    """한 샘플의 출처/라이선스 메타 레코드."""
-    license_ = rec.get("license", "")
+    """한 샘플의 출처/라이선스 메타 레코드.
+
+    텍스트와 이미지 출처가 다를 수 있다(BBQ 텍스트 + FairFace 이미지). image_source/
+    image_license를 분리 기록하고, is_nc는 둘 중 하나라도 NC면 True.
+    """
+    text_lic = rec.get("license", "")
+    has_img = bool(rec.get("image_ref"))
+    img_src = rec.get("image_source") if has_img else None
+    img_lic = rec.get("image_license") if has_img else None
+    # 하위호환: image_source 미기록 레코드는 텍스트 출처로 폴백.
+    if has_img and img_src is None:
+        img_src, img_lic = rec.get("source"), text_lic
     return {
         "sample_id": sample_id,
         "uid": rec.get("uid"),
         "text_source": rec.get("source"),
-        "image_source": rec.get("source") if rec.get("image_ref") else None,
-        "license": license_,
-        "is_nc": license_ == LICENSE_SB,
+        "image_source": img_src,
+        "license": text_lic,
+        "image_license": img_lic,
+        "is_nc": (text_lic == LICENSE_SB) or (img_lic == LICENSE_SB),
         "axis": rec.get("axis"),
         "ambig": rec.get("ambig"),
         "polarity": rec.get("polarity"),
@@ -84,16 +95,21 @@ def run(config: dict | None = None) -> None:
     # 메타데이터 작성
     lic_cnt: Counter = Counter()
     src_cnt: Counter = Counter()
+    img_src_cnt: Counter = Counter()
+    nc_cnt = 0
     with open(meta_path, "w", encoding="utf-8") as f:
         for _, r in df.iterrows():
             m = mapped.get(leak_key(r["context"], r["question"]), {})
             row = make_metadata_row(m, r["sample_id"])
             lic_cnt[row["license"]] += 1
             src_cnt[row["text_source"]] += 1
+            img_src_cnt[row["image_source"]] += 1
+            nc_cnt += int(row["is_nc"])
             f.write(json.dumps(row, ensure_ascii=False) + "\n")
 
     print(f"[metadata] train rows={len(df)} | test 누수 제거={removed}")
-    print(f"[metadata] source={dict(src_cnt)} | license={dict(lic_cnt)}")
+    print(f"[metadata] text_source={dict(src_cnt)} | text_license={dict(lic_cnt)}")
+    print(f"[metadata] image_source={dict(img_src_cnt)} | NC 샘플={nc_cnt}")
     print(f"[metadata] -> {meta_path}")
 
 

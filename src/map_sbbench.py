@@ -115,6 +115,8 @@ def map_sbbench_row(row: dict, unknown_lexicon: list[str]) -> dict | None:
         "unknown_idx": unk_idx,
         "unknown_text": options[unk_idx],
         "image_ref": None,  # run()에서 이미지 저장 후 채움
+        "image_source": None,
+        "image_license": None,
         "norm_key": leak_key(context, question),
         "meta": {"orig_id": orig_id, "ambig_inferred": inferred,
                  "sb_category": row.get("category")},
@@ -203,6 +205,8 @@ def run(config: dict | None = None) -> None:
             if img is not None:
                 try:
                     rec["image_ref"] = save_image_pil(img, images_dir, n_ok)
+                    rec["image_source"] = "sb-bench"
+                    rec["image_license"] = LICENSE_SB
                 except Exception as e:
                     print(f"[map_sbbench] 이미지 저장 실패 idx={i}: {e}")
             f.write(json.dumps(rec, ensure_ascii=False) + "\n")

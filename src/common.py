@@ -15,10 +15,11 @@ from pathlib import Path
 import yaml
 
 # 중간 스키마(mapped.jsonl) 필드명 — T1/T2가 쓰고 T3가 읽는 단일 정규형
+# image_source/image_license: 이미지 출처는 텍스트 출처와 다를 수 있다(BBQ 텍스트 + FairFace 이미지).
 MAPPED_FIELDS = (
     "uid", "source", "license", "axis", "polarity", "ambig",
     "context", "question", "options", "label", "unknown_idx",
-    "unknown_text", "image_ref", "norm_key", "meta",
+    "unknown_text", "image_ref", "image_source", "image_license", "norm_key", "meta",
 )
 
 # 대회 제출 CSV 스키마 (test.csv와 동일 + label)
@@ -26,6 +27,8 @@ TRAIN_COLUMNS = ("sample_id", "image_path", "context", "question", "answers", "l
 
 LICENSE_SB = "CC-BY-NC-4.0"
 LICENSE_BBQ = "CC-BY-4.0"
+LICENSE_FAIRFACE = "CC-BY-4.0"   # FairFace 얼굴 이미지 (상업/제출 안전)
+LICENSE_MMBIAS = "MIT"           # MMBias 실사 이미지 (상업/제출 안전)
 
 
 def project_root() -> Path:
