@@ -5,7 +5,8 @@ seed: 42
 safe_only: false
 
 # 규모: 셀(9축 × ambig/disambig × 2 polarity ≈ 36셀)당 상한
-target_per_cell: 2400
+# 2400(~45K) → 4000: SB-Bench real 최대 포함 + BBQ(58K 여유) 보강 확대로 데이터 양·다양성↑.
+target_per_cell: 4000
 
 # 비율 구성 (compose 단계)
 ratios:
