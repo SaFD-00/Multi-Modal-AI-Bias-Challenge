@@ -70,7 +70,11 @@ class LlavaOVCollator:
 
         image = load_image(item["image_path"], img_size=self.img_size)
         conv = build_conversation(item["context"], item["question"], item["answers"])
-        target = build_target_json(item["answers"], item["label"], self.unknown_lexicon)
+        # variant_key=context+question → 문항별로 reason 변형을 결정적으로 선택(표면 암기 차단).
+        target = build_target_json(
+            item["answers"], item["label"], self.unknown_lexicon,
+            variant_key=f'{item["context"]}|{item["question"]}',
+        )
 
         # prompt-only (assistant 생성 직전까지) → 프롬프트 토큰 길이 산출.
         # transformers 4.5x: apply_chat_template은 텍스트만 렌더(tokenize=False)하고,

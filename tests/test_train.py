@@ -88,6 +88,30 @@ def test_reason_unknown_surface_variants():
     assert r == "The context does not provide enough information to answer."
 
 
+def test_reason_variant_key_is_deterministic():
+    # 같은 variant_key → 항상 같은 변형(학습 결정성). 정답 옵션은 어떤 변형에도 포함.
+    answers = ["The grandfather", "Can't be determined", "The grandson"]
+    r1 = P.synthesize_reason(answers, 2, LEX, variant_key="ctx|q")
+    r2 = P.synthesize_reason(answers, 2, LEX, variant_key="ctx|q")
+    assert r1 == r2 and "The grandson" in r1
+
+
+def test_reason_variant_key_diversifies():
+    # 다양한 variant_key → 여러 변형이 실제로 등장(단일 템플릿 암기 → bf16 NaN 차단).
+    answers = ["The grandfather", "Can't be determined", "The grandson"]
+    disambig = {P.synthesize_reason(answers, 2, LEX, variant_key=f"k{i}") for i in range(60)}
+    amb = {P.synthesize_reason(answers, 1, LEX, variant_key=f"k{i}") for i in range(60)}
+    assert len(disambig) >= 3 and len(amb) >= 3
+
+
+def test_reason_empty_variant_key_is_backward_compatible():
+    # variant_key="" → index 0 = 기존 고정 문구(하위호환).
+    answers = ["The grandfather", "Can't be determined", "The grandson"]
+    assert P.synthesize_reason(answers, 2, LEX) == "The context indicates that the answer is The grandson."
+    amb = ["Not enough information", "x", "y"]
+    assert P.synthesize_reason(amb, 0, LEX) == "The context does not provide enough information to answer."
+
+
 def test_target_json_roundtrip_and_answer_id():
     answers = ["The grandfather", "Can't be determined", "The grandson"]
     s = P.build_target_json(answers, 2, LEX)
