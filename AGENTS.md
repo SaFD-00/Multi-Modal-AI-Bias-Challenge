@@ -37,7 +37,7 @@ CUDA_VISIBLE_DEVICES=1 python -m src.train.train --config configs/train_lora.yam
 python -m src.train.merge --adapter outputs/llava_ov_lora --out outputs/llava_ov_merged        # 추론용 병합
 ```
 
-> 데이터 구축은 GPU 불필요. 학습은 H100(GPU1) conda env에서 실행. `requirements.txt`가 학습 의존성까지 포함(별도 `requirements-train.txt` 없음). `data/`·`outputs/`는 `/data`로 심링크. 하이퍼파라미터는 H100 80GB 실측 기준 micro-batch 8/accum 4(effective 32 = 2^5)/lr 1e-4/warmup 0.1/max_grad_norm 1.0 (micro-batch 16은 peak 95%로 위험, 32는 vocab logits로 OOM).
+> 데이터 구축은 GPU 불필요. 학습은 H100(GPU1) conda env에서 실행. `requirements.txt`가 학습 의존성까지 포함(별도 `requirements-train.txt` 없음). `data/`·`outputs/`는 `/data`로 심링크. 하이퍼파라미터는 H100 80GB 실측 기준 micro-batch 16/accum 2(effective 32 = 2^5)/lr 1e-4/warmup 0.1/max_grad_norm 1.0 (처리량 위해 micro-batch 2배↑ — ⚠️ fp32에서 micro-batch 16은 OOM 위험 큼, OOM 시 8/accum 4로 환원).
 
 > **NaN 발산 주의** — lr 2e-4 + warmup 0.03(짧음)로 돌린 첫 run은 warmup peak 도달(step~6)에서 `grad_norm=nan` 발산 → 이후 `loss=0.0`/`eval_loss=nan` 고착(weight NaN 오염, checkpoint 사용 불가). lr을 1e-4로 낮추고 warmup_ratio 0.1로 늘려 해결. NaN은 max_grad_norm으로 못 막으므로(`nan>1.0`=False) lr/warmup이 1차 방어선.
 
