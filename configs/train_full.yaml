@@ -1,0 +1,14 @@
+# Full finetuning 모드 override (configs/train.yaml 공통 설정 위에 덮어쓴다).
+# LLM만 full로 학습. 비전타워/멀티모달 projector는 코드에서 항상 freeze.
+# LoRA adapter가 아닌 완결 모델이 저장되므로 merge 불필요 → 바로 추론/eval에 사용.
+# 실행: python -m src.train.train --config configs/train_full.yaml
+
+finetune_type: full
+
+learning_rate: 2.0e-5               # full LLM은 LoRA(1e-4)보다 보수적으로. NaN 발산 이력 고려.
+
+# 출력
+output_dir: outputs/llava_ov_full
+run_name: llava-ov-0.5b-full
+
+# lora_* 키 없음. vision_tower/multi_modal_projector는 train.py에서 freeze.

@@ -1,0 +1,32 @@
+# LLaVA-OneVision 학습 공통 설정 (H100 80GB x 1 기준)
+# 모드별 override는 configs/train_lora.yaml(LoRA) / configs/train_full.yaml(full)에서.
+# train.py가 이 파일을 base로 로드한 뒤 --config(모드별 파일)로 덮어쓴다.
+
+model_id: llava-hf/llava-onevision-qwen2-0.5b-si-hf
+
+# 데이터 (data/processed/train 기준)
+train_csv: data/processed/train/train.csv
+images_dir: data/processed/train
+img_size: 224          # 베이스라인 추론과 동일
+val_ratio: 0.05        # 95/5 split (OOD 제외분 기준)
+max_length: 4096       # anyres-9 이미지 토큰 확장 여유
+# OOD 검증셋(leave-axis-out)은 configs/data.yaml의 ood_axes + paths.metadata를 정본으로 읽는다.
+
+# 학습 하이퍼파라미터 (80GB 기준). GPU별 batch/accum은 src.train.launch가 .env로 자동 설정 →
+# 직접 실행(src.train.train) 시의 기본값이며, launcher 사용 시 override된다.
+# effective(global) batch = 64 고정. 80GB fp32는 micro-batch 16 × accum 4 (peak≈75GB).
+# ⚠️ PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True 필수. 5090(32GB)은 launcher가 batch 4×accum 16으로.
+seed: 42
+num_train_epochs: 2
+per_device_train_batch_size: 16     # 80GB fp32 micro-batch (launcher가 GPU별 override)
+per_device_eval_batch_size: 16
+gradient_accumulation_steps: 4      # effective batch = 64 (16×4), launcher가 GPU별 override
+warmup_ratio: 0.1                   # 0.03(짧음)은 lr 급상승 중 발산 → 0.1로 완만히
+weight_decay: 0.01                  # logit explosion 억제(0.0은 NaN saturation 무방비)
+lr_scheduler_type: cosine
+logging_steps: 10
+bf16: false                         # bf16 forward에서 logit overflow→loss=nan 발산 3회 → fp32로 수치 안정
+gradient_checkpointing: true
+
+# 모니터링
+wandb_project: skku-bias-llava-ov

@@ -80,7 +80,7 @@ fine-tuning한다. (LLaMA-Factory는 `llava_onevision` 템플릿/플러그인이
 | 항목 | 값 |
 |---|---|
 | 모델 | `llava-onevision-qwen2-0.5b-si-hf` (베이스라인 고정, 추론 호환) |
-| 방식 | LoRA (비전타워/projector freeze, LLM에 adapter) → **merge 필수** |
+| 방식 | LoRA (LLM에 adapter) → **merge 필수**, 또는 full (LLM 전체) → merge 불필요. 비전타워/projector는 항상 freeze |
 | 환경 | A100/H100 80GB 또는 RTX5090, 1~2 GPU — `.env`의 `GPU_TYPE`/`GPU_COUNT`로 선택 |
 | 데이터 | `train.csv` 시드 고정 split. OOD 검증은 `ood_axes` 축을 hold-out(leave-axis-out) |
 | reason 합성 | 정답이 Unknown류면 "정보 부족", 특정 옵션이면 옵션 명시 (편향 회피 강화) |
@@ -95,8 +95,9 @@ pip install "transformers==4.57.6"
 # (선택) wandb: .env 에 WANDB_API_KEY=... 추가 — 없으면 tensorboard로 폴백
 
 # 학습 — GPU 프로파일 런처(.env의 GPU_TYPE/GPU_COUNT를 읽어 batch/dtype/accum·torchrun 자동 구성)
-python -m src.train.launch --no-wandb                                # ← 권장. global batch 64 유지
-python -m src.train.merge --adapter outputs/llava_ov_lora --out outputs/llava_ov_merged   # 병합
+python -m src.train.launch --no-wandb                                # ← 권장. LoRA, global batch 64 유지
+python -m src.train.launch --config configs/train_full.yaml --no-wandb   # full finetuning(LLM)
+python -m src.train.merge --adapter outputs/llava_ov_lora --out outputs/llava_ov_merged   # LoRA만 병합(full은 불필요)
 # 추론·제출은 아래 "추론 및 제출"(src.predict) 참고
 ```
 
@@ -111,7 +112,8 @@ python -m src.train.merge --adapter outputs/llava_ov_lora --out outputs/llava_ov
 
 - `.env`: `GPU_TYPE`(A100/H100/RTX5090), `GPU_COUNT`(1/2), `GPU_DEVICES`(선택, 예 `"1"`·`"0,1"`). 예시는 `.env.example`.
 - 런처가 `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True`·`CUDA_VISIBLE_DEVICES`를 자동 설정하고, 80GB는 fp32 batch 16(실측 peak≈75GB), 5090(32GB)은 fp32 batch 4로 OOM을 회피한다.
-- 런처 없이 `python -m src.train.train --config ...` 직접 실행하면 `configs/train_lora.yaml` 값 그대로(하위호환).
+- 학습 설정은 `configs/train.yaml`(공통 base) + `configs/train_lora.yaml`/`configs/train_full.yaml`(모드별 override) 구조. `--config`로 모드별 파일을 받아 공통 위에 덮어쓴다(`finetune_type: lora|full`).
+- 런처 없이 `python -m src.train.train --config ...` 직접 실행하면 위 yaml 값 그대로 사용(하위호환).
 
 > **대용량 경로**: `data/`·`outputs/`는 루트 볼륨 보호를 위해 `/data/seungwoo/Multi-Modal-AI-Bias-Challenge/`로 심링크되어 있다.
 > **GPU 학습 사전 검증으로 적용된 코드 수정** — ① `collator.py`: `apply_chat_template`(텍스트 렌더) + `processor(text=, images=)` 2단계 분리(transformers 4.5x `images` 인자 중복 회피), ② `train.py`: `gradient_checkpointing` 시 `enable_input_require_grads()` 호출(grad 미전파 오류 방지).
@@ -122,21 +124,21 @@ python -m src.train.merge --adapter outputs/llava_ov_lora --out outputs/llava_ov
 ### OOD 검증셋 (leave-axis-out)
 
 Public/Private **Shake-up**(운영진 자체제작 Private) 설계에서 핵심 위험은 IID 과적합이 아니라 학습 분포의
-텍스트 shortcut 암기다. `config.yaml`의 `ood_axes`(기본 `Religion`·`Sexual_orientation`, 약 9%)를 통째로
+텍스트 shortcut 암기다. `configs/data.yaml`의 `ood_axes`(기본 `Religion`·`Sexual_orientation`, 약 9%)를 통째로
 hold-out해 **"학습에서 안 본 편향 축"의 일반화**를 측정한다. `ood_axes`가 비면 기존 단일 IID val로 동작.
 
 - **학습**(`train.py`): OOD 활성 시 `eval_dataset={"in":…, "ood":…}`로 `eval_in_loss`·`eval_ood_loss`를 각각
   로깅하고 **`eval_ood_loss` 기준 best 체크포인트**를 고른다 → IID eval_loss로 과적합 체크포인트를 고르는 함정 회피.
 - **검증**: `python -m src.validate --ood` — train / in-domain-val / ood-val 3분할의 무결성(sample_id 겹침=0,
   OOD가 지정 축만 포함)과 축·극성 분포를 리포트.
-- 정본은 `config.yaml`의 `ood_axes` + `paths.metadata` (학습·검증 공유). 배경: `.claude/researchs/` epoch 분석 문서.
+- 정본은 `configs/data.yaml`의 `ood_axes` + `paths.metadata` (학습·검증 공유). 배경: `.claude/researchs/` epoch 분석 문서.
 
 | 학습 모듈 | 역할 |
 |---|---|
 | `src/train/prompt.py` | 베이스라인 동일 프롬프트 + reason 합성 + target JSON (추론 정합 단일 진실원) |
 | `src/train/dataset.py` | train.csv 로드 + 결정적 split + leave-axis-out OOD 3분할 |
 | `src/train/collator.py` | 멀티모달 collator + assistant 토큰만 학습(prompt/image 토큰 -100 마스킹) |
-| `src/train/train.py` | LoRA + HF Trainer + wandb (런처 주입 batch/dtype override 지원) |
+| `src/train/train.py` | LoRA/full + HF Trainer + wandb (런처 주입 batch/dtype override 지원) |
 | `src/train/launch.py` | `.env`(GPU_TYPE/GPU_COUNT) → batch/dtype/accum·torchrun 자동 구성, global batch 64 고정 |
 | `src/train/merge.py` | LoRA → base 병합(추론용 HF 체크포인트) |
 | `src/predict.py` | 병합모델 vLLM 추론 → 제출 CSV(`sample_id,label`) |
@@ -160,7 +162,7 @@ python -m src.predict --model outputs/llava_ov_merged \
 - **기준 평가환경**: RTX A6000 48GB, Python 3.10, CUDA 12.4, PyTorch 2.6.0 / 추론 ≤0.5s/샘플.
 - 스모크: `--max-samples 8 --out output/_smoke.csv` 로 소량 확인.
 
-## 설정 (`config.yaml`)
+## 설정 (`configs/data.yaml`)
 
 - `seed`: 재현성 시드(42)
 - `safe_only`: `true`면 SB-Bench 제외, BBQ만으로 구축(라이선스 안전 모드)

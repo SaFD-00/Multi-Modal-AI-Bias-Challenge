@@ -35,8 +35,8 @@ def _abs(root, p):
 
 def load_splits(root):
     """train.py와 동일 분할 재현 → ({"in": in_val, "ood": ood}, images_dir, img_size, meta)."""
-    train_cfg = yaml.safe_load(open(_abs(root, "configs/train_lora.yaml")))
-    data_cfg = yaml.safe_load(open(root / "config.yaml"))
+    train_cfg = yaml.safe_load(open(_abs(root, "configs/train.yaml")))
+    data_cfg = yaml.safe_load(open(_abs(root, "configs/data.yaml")))
     ood_axes = data_cfg.get("ood_axes") or []
     meta = load_metadata(_abs(root, data_cfg["paths"]["metadata"]))
     rows = load_rows(_abs(root, train_cfg["train_csv"]))

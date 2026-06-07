@@ -215,7 +215,7 @@ def run(config: dict | None = None) -> None:
 def run_ood(config: dict | None = None) -> None:
     """in-domain·OOD leave-axis-out 3분할의 무결성·스키마·분포 검증.
 
-    config.yaml의 ood_axes(정본)로 train.csv를 train/in-domain-val/ood-val로 재현 분할하고,
+    configs/data.yaml의 ood_axes(정본)로 train.csv를 train/in-domain-val/ood-val로 재현 분할하고,
     분할 무결성 + split별 스키마 + 축/극성 분포를 리포트한다. 학습이 OOD 기준으로 best
     체크포인트를 고를 수 있는 전제(분할이 깨끗한지)를 보장한다.
     """
@@ -230,7 +230,7 @@ def run_ood(config: dict | None = None) -> None:
     meta_path = resolve_path(cfg, "metadata")
 
     if not ood_axes:
-        print("[validate-ood] config.yaml의 ood_axes가 비어 OOD 비활성. 축을 지정하세요.")
+        print("[validate-ood] configs/data.yaml의 ood_axes가 비어 OOD 비활성. 축을 지정하세요.")
         return
     if not meta_path.exists():
         raise SystemExit(f"[validate-ood] metadata 없음: {meta_path} (먼저 `python -m src.metadata`)")

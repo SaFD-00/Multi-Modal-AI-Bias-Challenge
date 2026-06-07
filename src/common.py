@@ -36,9 +36,9 @@ def project_root() -> Path:
 
 
 def load_config(path: str | Path | None = None) -> dict:
-    """config.yaml 로드. HF_TOKEN은 .env → 환경변수에서 채운다."""
+    """configs/data.yaml 로드. HF_TOKEN은 .env → 환경변수에서 채운다."""
     root = project_root()
-    cfg_path = Path(path) if path else root / "config.yaml"
+    cfg_path = Path(path) if path else root / "configs" / "data.yaml"
     with open(cfg_path, "r", encoding="utf-8") as f:
         cfg = yaml.safe_load(f)
 
