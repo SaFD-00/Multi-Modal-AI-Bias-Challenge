@@ -1,17 +1,18 @@
 """test.csv → submission.csv 추론 (대회 1차 제출물 생성).
 
-vLLM 오프라인 추론 + guided JSON 디코딩. 베이스라인 노트북 main() 로직을 CLI로
-이식하되, 프롬프트/이미지 전처리는 학습 모듈을 그대로 재사용해 학습-추론 정합을 보장한다
-(prompt.build_prompt_text, collator.load_image). vLLM은 멀티모달 LoRA 직접 로드가
-어려우므로 src.train.merge로 병합한 체크포인트를 로드한다.
+vLLM 오프라인 추론 + guided JSON 디코딩. 프롬프트/이미지 전처리는 학습 모듈을 그대로 재사용해
+학습-추론 정합을 보장한다(prompt.build_inference_prompt, collator.load_image). 모델 family는
+경로(outputs/{family}/...)나 config에서 자동감지하며, llava_ov는 베이스라인 chat 래핑을,
+qwen2_5_vl/mimo_vl은 processor.apply_chat_template를 사용한다. vLLM은 멀티모달 LoRA 직접 로드가
+어려우므로 full(merged/full) 또는 src.train.merge 산출물(merged/lora)을 로드한다.
 
 규칙 준수: 최종 답변은 LLM이 JSON을 생성하고 거기서 answer_id만 파싱한다(룰/argmax 아님).
 오프라인 실행(HF_HUB_OFFLINE / TRANSFORMERS_OFFLINE)으로 외부 통신을 차단한다.
+기준 평가환경: RTX A6000 48GB / Python 3.10 / CUDA 12.4 / PyTorch 2.6.0 / Ubuntu 20.04.
 
 실행:
-    python -m src.predict --model outputs/llava_ov_merged \
-        --test-csv data/raw/test/test.csv --images-dir data/raw/test \
-        --out output/submission.csv --img-size 224
+    python -m src.predict --model-family qwen2_5_vl          # outputs/qwen2_5_vl/eval/submission.csv
+    python -m src.predict --model outputs/llava_ov/merged/full   # 경로에서 family 자동감지
 """
 
 import argparse
@@ -20,17 +21,14 @@ import os
 from pathlib import Path
 
 from .common import project_root
-from .train.prompt import build_prompt_text
-
-# 베이스라인 run_llava_onevision의 chat 래핑 — 변경 금지(추론 정합).
-# 원본 f-string은 im_end 뒤 공백 1 + 줄잇기 들여쓰기 8 = 공백 9칸.
-CHAT_PREFIX = "<|im_start|>user <image>\n"
-CHAT_SUFFIX = "<|im_end|>" + " " * 9 + "<|im_start|>assistant\n"
+from .train import paths
+from .train.models import DEFAULT_FAMILY, detect_family, get_spec, render_mode
+from .train.prompt import build_inference_prompt
 
 
 def build_chat_prompt(context, question, answers) -> str:
-    """학습 프롬프트(build_prompt_text)를 LLaVA-OV chat 템플릿으로 감싼다."""
-    return CHAT_PREFIX + build_prompt_text(context, question, answers) + CHAT_SUFFIX
+    """llava_ov 추론 프롬프트(베이스라인 chat 래핑). 하위호환/테스트용 thin wrapper."""
+    return build_inference_prompt("llava_ov", None, context, question, answers)
 
 
 def normalize_answer_id(value) -> str:
@@ -60,12 +58,15 @@ def extract_answer_id(generated_text) -> str:
 def parse_args():
     root = project_root()
     ap = argparse.ArgumentParser(description="vLLM 추론으로 sample_id,label 제출 CSV 생성")
-    ap.add_argument("--model", default=str(root / "outputs/llava_ov_merged"),
-                    help="병합 체크포인트 디렉터리(src.train.merge 산출물)")
+    ap.add_argument("--model-family", default=None,
+                    help="모델 family (llava_ov|qwen2_5_vl|mimo_vl). 미지정 시 --model 경로에서 자동감지")
+    ap.add_argument("--model", default=None,
+                    help="추론 모델 디렉터리(미지정 시 outputs/{family}/merged/full)")
     ap.add_argument("--test-csv", default=str(root / "data/raw/test/test.csv"))
     ap.add_argument("--images-dir", default=str(root / "data/raw/test"),
                     help="image_path가 가리키는 이미지 루트")
-    ap.add_argument("--out", default=str(root / "output/submission.csv"))
+    ap.add_argument("--out", default=None,
+                    help="제출 CSV 경로(미지정 시 outputs/{family}/eval/submission.csv)")
     ap.add_argument("--img-size", type=int, default=224, help="학습과 동일(224) 유지")
     ap.add_argument("--batch-size", type=int, default=16)
     ap.add_argument("--seed", type=int, default=42)
@@ -95,12 +96,28 @@ def main():
         reason: str
         answer_id: Literal["0", "1", "2"]
 
-    model_path = Path(args.model)
+    # family 결정 + 경로 산출: --model 있으면 그 경로(+자동감지), 없으면 family로 기본경로 산출.
+    if args.model:
+        model_path = Path(args.model)
+        family = args.model_family or detect_family(model_path) or DEFAULT_FAMILY
+    else:
+        family = args.model_family or DEFAULT_FAMILY
+        model_path = paths.merged_dir(family, "full")
+    out_path = Path(args.out) if args.out else paths.submission_path(family)
+
     if not model_path.exists():
         raise SystemExit(
-            f"[predict] 병합 모델 경로 없음: {model_path}. "
-            "먼저 `python -m src.train.merge --adapter outputs/llava_ov_lora "
-            "--out outputs/llava_ov_merged` 를 실행하세요.")
+            f"[predict] 추론 모델 경로 없음: {model_path} (family={family}). "
+            f"full은 학습이 outputs/{family}/merged/full에 저장하고, "
+            f"lora는 `python -m src.train.merge --family {family}`로 outputs/{family}/merged/lora를 만든 뒤 "
+            "`--model`로 지정하세요.")
+
+    # chat_template 계열(qwen2_5_vl/mimo_vl)은 추론 프롬프트 렌더에 processor가 필요(오프라인 로드).
+    processor = None
+    if render_mode(family) == "chat_template":
+        from transformers import AutoProcessor
+        processor = AutoProcessor.from_pretrained(
+            str(model_path), trust_remote_code=get_spec(family)["trust_remote_code"])
 
     df = pd.read_csv(args.test_csv)
     if args.max_samples is not None:
@@ -134,7 +151,6 @@ def main():
         so_kwargs = {"guided_decoding": GuidedDecodingParams(json=schema)}
     sampling_params = SamplingParams(temperature=0.0, max_tokens=128, **so_kwargs)
 
-    out_path = Path(args.out)
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
     inputs, batch_indices = [], []
@@ -155,7 +171,7 @@ def main():
             df.at[row_idx, "label"] = "0"
             continue
         inputs.append({
-            "prompt": build_chat_prompt(row["context"], row["question"], row["answers"]),
+            "prompt": build_inference_prompt(family, processor, row["context"], row["question"], row["answers"]),
             "multi_modal_data": {"image": image},
         })
         batch_indices.append(row_idx)
