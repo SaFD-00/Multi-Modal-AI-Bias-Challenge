@@ -43,7 +43,7 @@ uv pip install -r requirements.txt
 
 ```bash
 .venv/bin/python -m src.map_sbbench   # SB-Bench real split 다운로드(~12.3GB) + 이미지 저장
-.venv/bin/python -m pytest tests/ -q  # 순수 함수 55개 GREEN (데이터 34 + 학습 21)
+.venv/bin/python -m pytest tests/ -q  # 순수 함수 86개 GREEN (데이터 + 학습 + 추론 + 런처 + 레지스트리/경로)
 .venv/bin/python -m src.augment_bbq   # 부족 셀 BBQ 보강 + FairFace/MMBias 이미지 결합(최초 1회 다운로드)
 .venv/bin/python -m src.compose       # Unknown 재다양화/위치 균등 → train.csv
 .venv/bin/python -m src.metadata      # test 누수 제거 + 출처/라이선스 기록
@@ -71,48 +71,51 @@ uv pip install -r requirements.txt
 > SB-Bench `real` split은 **전부 ambiguous**(정답=항상 Unknown). disambiguated 예시는 BBQ가 전담하므로
 > 하이브리드가 필수다. 규모를 더 키우면 여력이 남은 Intersectional/Race/Gender/SES 축에 집중된다.
 
-## 모델 학습 (LoRA)
+## 모델 학습 (다중 VLM)
 
-베이스라인과 **동일한** `llava-hf/llava-onevision-qwen2-0.5b-si-hf`를 transformers로 LoRA
-fine-tuning한다. (LLaMA-Factory는 `llava_onevision` 템플릿/플러그인이 없어 사용 불가 → 직접 학습.)
-학습 후 adapter를 base에 **merge**하면 베이스라인 추론 노트북이 모델 경로만 바꿔 그대로 로드한다.
+사용 가능 family(`src/train/models.py` `MODEL_REGISTRY`가 정본)를 transformers로 LoRA/full
+fine-tuning한다. (LLaMA-Factory 미사용 → 직접 학습.) `--model {family}`로 모델을 선택하며,
+모델별 분기(model_id·비전 freeze·pixel 배칭·프롬프트 렌더·LoRA 타깃)는 레지스트리에 모인다.
+
+| family | model_id | 비고 |
+|---|---|---|
+| `llava_ov` | `llava-hf/llava-onevision-qwen2-0.5b-si-hf` | 파일럿·확정 모델(0.5B). 베이스라인 chat 래핑 보존 |
+| `qwen2_5_vl` | `Qwen/Qwen2.5-VL-7B-Instruct` | 본 모델 후보(7B). processor chat template |
+| `mimo_vl` | `XiaomiMiMo/MiMo-VL-7B-RL` | 본 모델 후보(7B, Qwen2.5-VL 아키텍처 기반) |
 
 | 항목 | 값 |
 |---|---|
-| 모델 | `llava-onevision-qwen2-0.5b-si-hf` (베이스라인 고정, 추론 호환) |
 | 방식 | LoRA (LLM에 adapter) → **merge 필수**, 또는 full (LLM 전체) → merge 불필요. 비전타워/projector는 항상 freeze |
-| 환경 | A100/H100 80GB 또는 RTX5090, 1~2 GPU — `.env`의 `GPU_TYPE`/`GPU_COUNT`로 선택 |
+| 출력 | `outputs/{family}/adapters/lora`(LoRA) · `outputs/{family}/merged/{lora,full}`(추론용) · `outputs/{family}/eval/` (자동 산출, `src/train/paths.py`) |
+| 환경 | A100/H100 80GB 또는 RTX5090, 1~2 GPU — `.env`의 `GPU_TYPE`/`GPU_COUNT`로 선택. **7B full FT는 80GB+ 필요(5090 불가) → 7B는 LoRA 권장** |
 | 데이터 | `train.csv` 시드 고정 split. OOD 검증은 `ood_axes` 축을 hold-out(leave-axis-out) |
 | reason 합성 | 정답이 Unknown류면 "정보 부족", 특정 옵션이면 옵션 명시 (편향 회피 강화) |
 | 모니터링 | **WANDB** (키 없으면 tensorboard 자동 폴백) |
 
 ```bash
-# H100 환경 (conda env: /data/seungwoo/Multi-Modal-AI-Bias-Challenge/.conda-env, python 3.10)
-#   torch/torchvision: cu128 휠, transformers==4.57.6 핀(상위 5.x는 processor API 비호환)
-pip install torch torchvision --index-url https://download.pytorch.org/whl/cu128
-pip install -r requirements.txt          # 학습 의존성 포함(torch/transformers/peft/accelerate/wandb)
-pip install "transformers==4.57.6"
-# (선택) wandb: .env 에 WANDB_API_KEY=... 추가 — 없으면 tensorboard로 폴백
+# 학습 환경(.venv-train, RTX5090) — 아래 RTX5090 블록 참조. torch cu128 + transformers==4.57.6 핀.
+export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 
 # 학습 — GPU 프로파일 런처(.env의 GPU_TYPE/GPU_COUNT를 읽어 batch/dtype/accum·torchrun 자동 구성)
-python -m src.train.launch --no-wandb                                # ← 권장. LoRA, global batch 64 유지
-python -m src.train.launch --config configs/train_full.yaml --no-wandb   # full finetuning(LLM)
-python -m src.train.merge --adapter outputs/llava_ov_lora --out outputs/llava_ov_merged   # LoRA만 병합(full은 불필요)
+.venv-train/bin/python -m src.train.launch --model qwen2_5_vl --config configs/train_lora.yaml --no-wandb  # 7B LoRA
+.venv-train/bin/python -m src.train.launch --model llava_ov  --config configs/train_full.yaml  --no-wandb  # 0.5B full
+.venv-train/bin/python -m src.train.merge --family qwen2_5_vl    # LoRA → outputs/qwen2_5_vl/merged/lora (full은 불필요)
 # 추론·제출은 아래 "추론 및 제출"(src.predict) 참고
 ```
 
-> **RTX5090 로컬 머신** (위 H100 conda-env가 없는 경우 — 데이터용 `.venv`엔 torch 없음): 학습 전용 venv를 별도 구축.
+> **RTX5090 로컬 학습 venv** (데이터/추론 `.venv`엔 torch 없음 → 학습 전용 venv를 별도 구축, `.gitignore` 등록):
 > ```bash
-> uv venv --python 3.10 .venv-train     # .gitignore 등록됨
+> uv venv --python 3.10 .venv-train
 > uv pip install --python .venv-train/bin/python torch torchvision --index-url https://download.pytorch.org/whl/cu128
 > uv pip install --python .venv-train/bin/python "transformers==4.57.6" peft accelerate tensorboard pandas pillow pyyaml tqdm python-dotenv datasets
-> .venv-train/bin/python -m src.train.launch --config configs/train_full.yaml --no-wandb   # .env GPU_DEVICES=1 → GPU1
+> .venv-train/bin/python -m src.train.launch --model qwen2_5_vl --config configs/train_lora.yaml --no-wandb   # .env GPU_DEVICES=1 → GPU1
 > ```
-> 실측: torch 2.11.0+cu128 / tf 4.57.6 / peft 0.19.1 / accel 1.13.0, RTX5090(sm_120) OK. WANDB 키 없으면 tensorboard 폴백(loss는 `outputs/<run>/runs/`).
+> 실측: torch 2.11.0+cu128 / tf 4.57.6 / peft 0.19.1 / accel 1.13.0, RTX5090(sm_120) OK. WANDB 키 없으면 tensorboard 폴백(loss는 `outputs/{family}/.../runs/`).
+> ⚠️ MiMo-VL은 tf 4.57.6 네이티브 미지원 시 `trust_remote_code`(레지스트리에 설정됨) 또는 버전 조정 필요 → 학습 머신에서 1차 검증.
 
-> **Full FT 1차 결과 (2026-06-07, RTX5090×1, `configs/train_full.yaml`)**: `outputs/llava_ov_full`(best=epoch1) — `src.eval_holdout` 실측
+> **LLaVA-OV Full FT 1차 결과 (2026-06-07, RTX5090×1, `configs/train_full.yaml`)**: `outputs/llava_ov/merged/full`(best=epoch1) — `src.eval_holdout` 실측
 > **in-domain acc 0.9990(ambig 1.0000/disambig 0.9978), OOD(Religion·SO) acc 0.9545(ambig 0.9997/disambig 0.8207), 갭 +0.0445.**
-> 핵심 편향지표(ambiguous=unknown 회수)는 미학습 OOD축에서도 0.9997. 약점은 OOD disambiguated 0.82(미학습 축 시각추론). epoch1≈epoch2(수렴).
+> 핵심 편향지표(ambiguous=unknown 회수)는 미학습 OOD축에서도 0.9997. 약점은 OOD disambiguated 0.82(미학습 축 시각추론). 이는 0.5B 파일럿 성능이며 7B 본 모델로 개선을 노린다.
 
 **GPU 프로파일 (`.env` 설정 → `src.train.launch`)** — 어떤 조합이든 **global(effective) batch는 64로 고정**:
 
@@ -123,10 +126,11 @@ python -m src.train.merge --adapter outputs/llava_ov_lora --out outputs/llava_ov
 | `RTX5090` (32GB) | 1 | 4 × 16 × 1 = 64 | fp32 | 직접 |
 | `RTX5090` (32GB) | 2 | 4 × 8 × 2 = 64 | fp32 | torchrun DDP |
 
+- 위 표는 **0.5B(llava_ov)** 실측값이다. **7B(qwen2_5_vl/mimo_vl)는 `--model {family}`를 넘기면 per-device batch를 보수적으로 하향**(A100/H100=2, 5090=1; `launch.FAMILY_PER_DEVICE`)하고 accum을 재계산해 global 64를 유지한다(시작값, 실측 튜닝 권장).
 - `.env`: `GPU_TYPE`(A100/H100/RTX5090), `GPU_COUNT`(1/2), `GPU_DEVICES`(선택, 예 `"1"`·`"0,1"`). 예시는 `.env.example`.
-- 런처가 `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True`·`CUDA_VISIBLE_DEVICES`를 자동 설정하고, 80GB는 fp32 batch 16(실측 peak≈75GB), 5090(32GB)은 fp32 batch 4로 OOM을 회피한다.
-- 학습 설정은 `configs/train.yaml`(공통 base) + `configs/train_lora.yaml`/`configs/train_full.yaml`(모드별 override) 구조. `--config`로 모드별 파일을 받아 공통 위에 덮어쓴다(`finetune_type: lora|full`).
-- 런처 없이 `python -m src.train.train --config ...` 직접 실행하면 위 yaml 값 그대로 사용(하위호환).
+- 런처가 `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True`·`CUDA_VISIBLE_DEVICES`를 자동 설정한다.
+- 학습 설정은 `configs/train.yaml`(공통 base, `model:` 기본 family) + `configs/train_lora.yaml`/`configs/train_full.yaml`(모드별 override) 구조. `--config`로 모드별 파일을, `--model`로 family를 받는다(`finetune_type: lora|full`). 출력경로는 family+모드로 자동 산출.
+- 런처 없이 `python -m src.train.train --model {family} --config ...` 직접 실행하면 위 yaml 값 그대로 사용(하위호환).
 
 > **대용량 경로**: `data/`·`outputs/`는 루트 볼륨 보호를 위해 `/data/seungwoo/Multi-Modal-AI-Bias-Challenge/`로 심링크되어 있다.
 > **GPU 학습 사전 검증으로 적용된 코드 수정** — ① `collator.py`: `apply_chat_template`(텍스트 렌더) + `processor(text=, images=)` 2단계 분리(transformers 4.5x `images` 인자 중복 회피), ② `train.py`: `gradient_checkpointing` 시 `enable_input_require_grads()` 호출(grad 미전파 오류 방지).
@@ -145,38 +149,40 @@ hold-out해 **"학습에서 안 본 편향 축"의 일반화**를 측정한다. 
 - **검증**: `python -m src.validate --ood` — train / in-domain-val / ood-val 3분할의 무결성(sample_id 겹침=0,
   OOD가 지정 축만 포함)과 축·극성 분포를 리포트.
 - 정본은 `configs/data.yaml`의 `ood_axes` + `paths.metadata` (학습·검증 공유). 배경: `.claude/researchs/` epoch 분석 문서.
-- **실제 accuracy 평가**(loss 아님): `python -m src.eval_holdout --model outputs/llava_ov_full --split both` —
+- **실제 accuracy 평가**(loss 아님): `python -m src.eval_holdout --model-family llava_ov --split both` —
   train.py와 동일 분할을 재현해 in/OOD의 정답률 + ambig(unknown 회수)/disambig별 정확도를 vLLM 추론으로 측정.
-  full 모델은 그대로, LoRA는 `src.train.merge` 병합본 필요. vLLM 신/구 버전 API 모두 호환(structured_outputs↔guided_decoding).
+  full(merged/full)은 그대로, LoRA는 `--variant lora`(merged/lora, merge 선행). vLLM 신/구 버전 API 모두 호환(structured_outputs↔guided_decoding).
 
 | 학습 모듈 | 역할 |
 |---|---|
-| `src/train/prompt.py` | 베이스라인 동일 프롬프트 + reason 합성 + target JSON (추론 정합 단일 진실원) |
+| `src/train/models.py` | 모델 family 레지스트리(model_id·freeze·pixel 배칭·렌더·LoRA 타깃) + 로드/배칭 헬퍼 |
+| `src/train/paths.py` | family별 출력경로 산출(`outputs/{family}/{adapters/lora, merged/{lora,full}, eval}`) |
+| `src/train/prompt.py` | 프롬프트 빌드 + family별 추론 렌더(llava_ov chat 래핑 / 그 외 apply_chat_template) + reason/target JSON |
 | `src/train/dataset.py` | train.csv 로드 + 결정적 split + leave-axis-out OOD 3분할 |
-| `src/train/collator.py` | 멀티모달 collator + assistant 토큰만 학습(prompt/image 토큰 -100 마스킹) |
-| `src/train/train.py` | LoRA/full + HF Trainer + wandb (런처 주입 batch/dtype override 지원) |
-| `src/train/launch.py` | `.env`(GPU_TYPE/GPU_COUNT) → batch/dtype/accum·torchrun 자동 구성, global batch 64 고정 |
-| `src/train/merge.py` | LoRA → base 병합(추론용 HF 체크포인트) |
-| `src/predict.py` | 병합모델 vLLM 추론 → 제출 CSV(`sample_id,label`) |
+| `src/train/collator.py` | family 비의존 멀티모달 collator + assistant 토큰만 학습(-100 마스킹), mm 배칭은 레지스트리 위임 |
+| `src/train/train.py` | `--model {family}` LoRA/full + HF Trainer + wandb (런처 주입 batch/dtype override 지원) |
+| `src/train/launch.py` | `.env`(GPU_TYPE/GPU_COUNT)+family → batch/dtype/accum·torchrun 자동 구성, global batch 64 고정 |
+| `src/train/merge.py` | `--family` LoRA → base 병합(추론용 HF 체크포인트, 범용 Auto 클래스) |
+| `src/predict.py` | family 자동감지 vLLM 추론 → 제출 CSV(`sample_id,label`) |
+| `src/eval_holdout.py` | family 자동감지 leave-axis-out accuracy(in/OOD, ambig/disambig) |
 
 ## 추론 및 제출
 
-대회 1차 제출물(`output/submission.csv`, **`sample_id,label`**)을 만든다. 프롬프트/이미지
-전처리(img_size=224)는 `src/train/prompt.py`·`src/train/collator.py`를 재사용해 **학습과 동일**하다.
+대회 1차 제출물(`outputs/{family}/eval/submission.csv`, **`sample_id,label`**)을 만든다. 프롬프트(family별
+렌더)/이미지 전처리(img_size=224)는 `src/train/prompt.py`·`src/train/collator.py`를 재사용해 **학습과 동일**하다.
 최종 답변은 LLM이 JSON(`{"reason","answer_id"}`)을 **생성**하고 거기서 `answer_id`만 파싱한다(룰 매핑 아님).
 
 ```bash
-# 의존성은 requirements.txt로 통합 — ⚠️ vLLM은 학습 transformers 핀과 충돌 가능하니 추론은 별도 venv 권장
+# 의존성은 requirements.txt로 통합 — ⚠️ vLLM은 학습 transformers 핀과 충돌 가능하니 추론은 별도 venv(.venv) 권장
 pip install -r requirements.txt        # 또는 별도 venv에서: pip install vllm pydantic
-python -m src.predict --model outputs/llava_ov_merged \
-    --test-csv data/raw/test/test.csv --images-dir data/raw/test \
-    --out output/submission.csv --img-size 224
+python -m src.predict --model-family llava_ov        # → outputs/llava_ov/eval/submission.csv
+python -m src.predict --model outputs/qwen2_5_vl/merged/lora   # 경로 직접 지정(family 자동감지)
 ```
 
-- **병합 필수**: vLLM은 멀티모달 LoRA 직접 로드가 어려워 `src.train.merge` 산출물(`outputs/llava_ov_merged`)을 로드한다.
+- **family 자동감지**: `--model-family`(명시) 또는 `--model` 경로(`outputs/{family}/...`)·config에서 감지. full은 `merged/full`, LoRA는 `src.train.merge` 산출물(`merged/lora`)을 로드(vLLM 멀티모달 LoRA 직접 로드 제약).
 - **오프라인**: `src.predict`가 `HF_HUB_OFFLINE`/`TRANSFORMERS_OFFLINE`를 강제한다(외부 API/통신 금지 규칙).
-- **기준 평가환경**: RTX A6000 48GB, Python 3.10, CUDA 12.4, PyTorch 2.6.0 / 추론 ≤0.5s/샘플.
-- 스모크: `--max-samples 8 --out output/_smoke.csv` 로 소량 확인.
+- **기준 평가환경(COMPETITION.md §6)**: RTX A6000 48GB, Python 3.10, CUDA 12.4, PyTorch 2.6.0, Ubuntu 20.04 / 추론 ≤0.5s/샘플(Test 8,500≈70분). 7B는 A6000 bf16 적재 가능하나 속도는 기준 환경에서 측정 필요.
+- 스모크: `--max-samples 8 --out outputs/{family}/eval/_smoke.csv` 로 소량 확인.
 
 ## 설정 (`configs/data.yaml`)
 
