@@ -1,9 +1,10 @@
 # Data (large artifacts, not versioned)
 data/
 
-# Training artifacts (checkpoints/logs, not versioned)
+# Training/inference artifacts (checkpoints/logs/submission, not versioned)
 outputs/
 logs/
+output/
 
 # Environments & secrets
 .venv/
