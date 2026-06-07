@@ -1,8 +1,13 @@
 # Data (large artifacts, not versioned)
 data/
 
+# Training artifacts (checkpoints/logs, not versioned)
+outputs/
+logs/
+
 # Environments & secrets
 .venv/
+.venv-train/
 .env
 
 # Python caches
