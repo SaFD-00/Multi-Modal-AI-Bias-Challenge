@@ -6,8 +6,10 @@ GPU/vllm 없이 동작하는 부분만 검증한다(JSON 파싱·프롬프트 �
 
 import json
 
+import pytest
+
 from src.predict import build_chat_prompt, extract_answer_id, normalize_answer_id
-from src.train.prompt import build_prompt_text
+from src.train.prompt import build_inference_prompt, build_prompt_text
 
 ANSWERS = json.dumps(["A man", "A woman", "Cannot be determined"])
 
@@ -50,3 +52,16 @@ def test_chat_prompt_wraps_training_prompt():
     assert inner in wrapped
     assert wrapped.startswith("<|im_start|>user <image>\n")
     assert wrapped.endswith("<|im_start|>assistant\n")
+
+
+# --- build_inference_prompt: family 분기 ---
+def test_inference_prompt_llava_ov_equals_chat_prompt():
+    # llava_ov는 processor 없이 기존 chat 래핑과 글자 단위 동일(확정 모델 정합 보존).
+    assert build_inference_prompt("llava_ov", None, "ctx", "q?", ANSWERS) == \
+        build_chat_prompt("ctx", "q?", ANSWERS)
+
+
+def test_inference_prompt_chat_template_requires_processor():
+    # qwen2_5_vl/mimo_vl은 processor.apply_chat_template 필요 → processor=None이면 명시적 에러.
+    with pytest.raises(ValueError):
+        build_inference_prompt("qwen2_5_vl", None, "ctx", "q?", ANSWERS)
