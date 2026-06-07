@@ -134,3 +134,25 @@ def build_conversation(context, question, answers, image_token="<image>"):
             ],
         }
     ]
+
+
+# 베이스라인 run_llava_onevision의 chat 래핑 — 변경 금지(llava_ov 추론 정합).
+# 원본 f-string은 im_end 뒤 공백 1 + 줄잇기 들여쓰기 8 = 공백 9칸.
+CHAT_PREFIX = "<|im_start|>user <image>\n"
+CHAT_SUFFIX = "<|im_end|>" + " " * 9 + "<|im_start|>assistant\n"
+
+
+def build_inference_prompt(family, processor, context, question, answers) -> str:
+    """family별 추론 프롬프트 렌더링.
+
+    - llava_ov: 베이스라인과 동일한 하드코딩 chat 래핑(확정 모델 정합 보존, processor 불필요).
+    - 그 외(qwen2_5_vl/mimo_vl): processor.apply_chat_template로 모델별 vision 토큰 포함 렌더.
+    """
+    from .models import render_mode
+
+    if render_mode(family) == "llava_ov":
+        return CHAT_PREFIX + build_prompt_text(context, question, answers) + CHAT_SUFFIX
+    if processor is None:
+        raise ValueError(f"family={family} 추론 프롬프트 렌더링에는 processor가 필요합니다.")
+    conv = build_conversation(context, question, answers)
+    return processor.apply_chat_template(conv, add_generation_prompt=True, tokenize=False)

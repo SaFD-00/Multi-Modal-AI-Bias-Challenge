@@ -1,8 +1,10 @@
-# LLaVA-OneVision 학습 공통 설정 (H100 80GB x 1 기준)
+# 다중 VLM 학습 공통 설정 (80GB x 1 기준)
 # 모드별 override는 configs/train_lora.yaml(LoRA) / configs/train_full.yaml(full)에서.
 # train.py가 이 파일을 base로 로드한 뒤 --config(모드별 파일)로 덮어쓴다.
 
-model_id: llava-hf/llava-onevision-qwen2-0.5b-si-hf
+# 기본 모델 family. CLI --model이 우선. 지원: llava_ov / qwen2_5_vl / mimo_vl.
+# model_id·비전 freeze·LoRA 타깃은 src/train/models.py MODEL_REGISTRY가 정본.
+model: llava_ov
 
 # 데이터 (data/processed/train 기준)
 train_csv: data/processed/train/train.csv

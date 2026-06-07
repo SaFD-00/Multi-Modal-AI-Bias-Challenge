@@ -1,17 +1,13 @@
 # LoRA 모드 override (configs/train.yaml 공통 설정 위에 덮어쓴다).
-# 베이스라인 추론 모델과 동일 → merge 후 추론 노트북에 그대로 로드 가능.
-# 실행: python -m src.train.train --config configs/train_lora.yaml
+# 실행: python -m src.train.train --model {family} --config configs/train_lora.yaml
+# 출력은 outputs/{family}/adapters/lora 로 자동 산출(merge → outputs/{family}/merged/lora).
+# run_name은 train.py가 "{family}-lora"로 자동 생성.
 
 finetune_type: lora
 
 learning_rate: 1.0e-4               # 2e-4는 warmup peak(step~6)에서 grad NaN 발산 → 1e-4로 하향
 
-# 출력
-output_dir: outputs/llava_ov_lora
-run_name: llava-ov-0.5b-lora
-
-# LoRA (LLM에만 적용, 비전타워/projector freeze)
+# LoRA (LLM에만 적용, 비전타워/projector freeze). target_modules 미지정 시 레지스트리 기본값 사용.
 lora_r: 16
 lora_alpha: 32
 lora_dropout: 0.05
-lora_target_modules: [q_proj, k_proj, v_proj, o_proj, gate_proj, up_proj, down_proj]

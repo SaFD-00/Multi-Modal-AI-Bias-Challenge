@@ -1,15 +1,19 @@
-"""LLaVA-OneVision 학습 진입점 (A100 80GB x 1).
+"""다중 VLM(family) SFT 학습 진입점.
 
+지원 family: llava_ov / qwen2_5_vl / mimo_vl (src.train.models.MODEL_REGISTRY). 모델 클래스·
+processor·비전 freeze·LoRA 타깃은 레지스트리가 정본이며, 이 스크립트는 --model {family}로 선택한다.
 configs/train.yaml(공통)을 base로 로드한 뒤 --config(모드별 파일)로 덮어쓴다. 비전타워/멀티모달
 projector는 모드와 무관하게 freeze하고 LLM만 학습한다. finetune_type=lora면 LLM에 adapter를,
 full이면 LLM 전체를 학습한다. WANDB로 train/eval loss를 모니터링한다(키 없으면 tensorboard 폴백).
 
+출력(family/모드별 자동 산출, src.train.paths):
+    lora → outputs/{family}/adapters/lora    (merge로 outputs/{family}/merged/lora 생성)
+    full → outputs/{family}/merged/full       (완결 모델, 병합 불필요)
+
 실행:
-    python -m src.train.train --config configs/train_lora.yaml   # LoRA (기본)
-    python -m src.train.train --config configs/train_full.yaml   # full (LLM)
+    python -m src.train.train --model qwen2_5_vl --config configs/train_lora.yaml   # LoRA
+    python -m src.train.train --model llava_ov  --config configs/train_full.yaml    # full
     python -m src.train.train --config configs/train_lora.yaml --max-samples 64 --no-wandb  # 스모크
-학습 후 LoRA adapter는 output_dir에 저장 → src.train.merge로 base에 병합해 추론에 사용.
-full 모드는 완결 모델이 저장되므로 병합 불필요.
 """
 
 import argparse
@@ -19,7 +23,8 @@ from pathlib import Path
 import yaml
 
 from ..common import project_root
-from .collator import LlavaOVCollator
+from . import paths
+from .collator import VLMCollator
 from .dataset import (
     BiasVQADataset,
     load_metadata,
@@ -27,6 +32,7 @@ from .dataset import (
     split_train_val,
     split_train_val_ood,
 )
+from .models import DEFAULT_FAMILY
 
 
 def load_train_config(path):
@@ -61,28 +67,23 @@ def setup_wandb(cfg, use_wandb):
     return ["wandb"]
 
 
-def build_model_and_processor(cfg):
+def build_model_and_processor(cfg, family):
     import torch
-    from transformers import AutoProcessor, LlavaOnevisionForConditionalGeneration
 
-    processor = AutoProcessor.from_pretrained(cfg["model_id"])
-    model = LlavaOnevisionForConditionalGeneration.from_pretrained(
-        cfg["model_id"],
-        torch_dtype=torch.bfloat16 if cfg.get("bf16", True) else torch.float32,
-    )
+    from . import models
 
-    # 비전타워 + 멀티모달 projector freeze. LoRA/full 모드 모두 LLM만 학습한다.
-    for name, p in model.named_parameters():
-        if "vision_tower" in name or "multi_modal_projector" in name:
-            p.requires_grad = False
+    # family별 모델/processor 로드 + 비전타워/projector freeze (LoRA/full 모드 모두 LLM만 학습).
+    model, processor = models.load_model_and_processor(family, bf16=cfg.get("bf16", True))
 
     if cfg.get("finetune_type", "lora") == "lora":
         from peft import LoraConfig, get_peft_model
+        # lora_target_modules는 config override가 있으면 우선, 없으면 레지스트리 기본값.
+        targets = cfg.get("lora_target_modules") or models.lora_targets(family)
         lora = LoraConfig(
             r=cfg["lora_r"],
             lora_alpha=cfg["lora_alpha"],
             lora_dropout=cfg["lora_dropout"],
-            target_modules=cfg["lora_target_modules"],
+            target_modules=targets,
             task_type="CAUSAL_LM",
         )
         model = get_peft_model(model, lora)
@@ -109,7 +110,9 @@ def build_model_and_processor(cfg):
 
 
 def main():
-    ap = argparse.ArgumentParser(description="LLaVA-OneVision SFT (LoRA/full)")
+    ap = argparse.ArgumentParser(description="다중 VLM SFT (LoRA/full)")
+    ap.add_argument("--model", default=None,
+                    help="모델 family (llava_ov|qwen2_5_vl|mimo_vl). 미지정 시 config의 model, 없으면 llava_ov")
     ap.add_argument("--config", default="configs/train_lora.yaml",
                     help="모드별 override (configs/train.yaml 공통 base 위에 덮어씀)")
     ap.add_argument("--max-samples", type=int, default=None, help="스모크용 샘플 제한")
@@ -122,6 +125,13 @@ def main():
     # 공통 base(train.yaml)를 로드한 뒤 모드별 파일(--config)로 얕은 override.
     cfg = load_train_config(root / "configs" / "train.yaml")
     cfg.update(load_train_config(_abs(root, args.config)))
+
+    # 모델 family 결정: CLI > config(model) > 기본(llava_ov).
+    family = args.model or cfg.get("model") or DEFAULT_FAMILY
+    finetune_type = cfg.get("finetune_type", "lora")
+    # 출력 경로는 family + 모드로 자동 산출(lora=adapters/lora, full=merged/full).
+    out_dir = paths.adapter_dir(family) if finetune_type == "lora" else paths.merged_dir(family, "full")
+    run_name = cfg.get("run_name") or f"{family}-{finetune_type}"
 
     # GPU 프로파일 런처(src.train.launch)가 .env(GPU_TYPE/GPU_COUNT) 기반으로 주입한 override.
     # 직접 실행 시엔 env 미설정 → yaml 값 그대로 사용(하위호환). global batch는 런처가 32로 맞춘다.
@@ -171,16 +181,16 @@ def main():
         best_metric = "eval_loss"
         print(f"train={len(train_rows)} val={len(val_rows)}")
 
-    model, processor = build_model_and_processor(cfg)
-    collator = LlavaOVCollator(
-        processor, img_size=cfg["img_size"],
+    model, processor = build_model_and_processor(cfg, family)
+    collator = VLMCollator(
+        processor, family=family, img_size=cfg["img_size"],
         unknown_lexicon=unknown_lexicon, max_length=cfg["max_length"],
     )
 
     report_to = setup_wandb(cfg, use_wandb=not args.no_wandb)
 
     targs = TrainingArguments(
-        output_dir=str(_abs(root, cfg["output_dir"])),
+        output_dir=str(out_dir),
         num_train_epochs=cfg["num_train_epochs"],
         per_device_train_batch_size=cfg["per_device_train_batch_size"],
         per_device_eval_batch_size=cfg["per_device_eval_batch_size"],
@@ -200,7 +210,7 @@ def main():
         greater_is_better=False,
         seed=cfg["seed"],
         report_to=report_to,
-        run_name=cfg.get("run_name"),
+        run_name=run_name,
         remove_unused_columns=False,
         dataloader_num_workers=4,
     )
@@ -213,12 +223,14 @@ def main():
         data_collator=collator,
     )
     trainer.train()
-    trainer.save_model(str(_abs(root, cfg["output_dir"])))
-    processor.save_pretrained(str(_abs(root, cfg["output_dir"])))
-    if cfg.get("finetune_type", "lora") == "lora":
-        print(f"LoRA adapter 저장: {cfg['output_dir']}  → src.train.merge로 병합하세요.")
+    trainer.save_model(str(out_dir))
+    processor.save_pretrained(str(out_dir))
+    if finetune_type == "lora":
+        merged = paths.merged_dir(family, "lora")
+        print(f"LoRA adapter 저장: {out_dir}  → `python -m src.train.merge --family {family}`로 "
+              f"{merged}에 병합하세요.")
     else:
-        print(f"Full 모델 저장: {cfg['output_dir']}  → 병합 불필요. 바로 추론/eval에 사용하세요.")
+        print(f"Full 모델 저장: {out_dir}  → 병합 불필요. 바로 추론/eval에 사용하세요.")
 
 
 if __name__ == "__main__":
