@@ -55,7 +55,6 @@ def build_engine(model_path, seed):
     import torch
     from pydantic import BaseModel
     from vllm import LLM, SamplingParams
-    from vllm.sampling_params import GuidedDecodingParams
 
     class ReasonAnswer(BaseModel):
         reason: str
@@ -65,16 +64,29 @@ def build_engine(model_path, seed):
         raise SystemExit(
             f"[eval] 병합 모델 경로 없음: {model_path}. "
             "src.train.merge로 체크포인트를 먼저 병합하세요.")
-    llm = LLM(
+    # vLLM 버전별 EngineArgs 호환: 신버전에서 제거된 인자(disable_mm_preprocessor_cache 등)는
+    # EngineArgs 필드에 없으면 자동 제외해 버전 무관하게 동작(구버전 평가환경엔 그대로 전달).
+    llm_kwargs = dict(
         model=str(model_path), max_model_len=16384,
         limit_mm_per_prompt={"image": 1},
         tensor_parallel_size=max(1, torch.cuda.device_count()),
         gpu_memory_utilization=0.9, disable_mm_preprocessor_cache=True, seed=seed,
     )
-    sp = SamplingParams(
-        temperature=0.0, max_tokens=128,
-        guided_decoding=GuidedDecodingParams(json=ReasonAnswer.model_json_schema()),
-    )
+    from vllm.engine.arg_utils import EngineArgs
+    valid = set(getattr(EngineArgs, "__dataclass_fields__", {}))
+    if valid:
+        llm_kwargs = {k: v for k, v in llm_kwargs.items() if k in valid}
+    llm = LLM(**llm_kwargs)
+    # vLLM 버전별 structured-output API 호환: 신버전(structured_outputs) → 구버전(guided_decoding) 폴백.
+    # 공식 평가환경(구버전 vLLM)과 로컬 신버전(0.17.x) 양쪽에서 동작.
+    schema = ReasonAnswer.model_json_schema()
+    try:
+        from vllm.sampling_params import StructuredOutputsParams
+        so_kwargs = {"structured_outputs": StructuredOutputsParams(json=schema)}
+    except ImportError:
+        from vllm.sampling_params import GuidedDecodingParams
+        so_kwargs = {"guided_decoding": GuidedDecodingParams(json=schema)}
+    sp = SamplingParams(temperature=0.0, max_tokens=128, **so_kwargs)
     return llm, sp
 
 
