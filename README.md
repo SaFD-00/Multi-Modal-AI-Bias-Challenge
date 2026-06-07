@@ -101,6 +101,19 @@ python -m src.train.merge --adapter outputs/llava_ov_lora --out outputs/llava_ov
 # 추론·제출은 아래 "추론 및 제출"(src.predict) 참고
 ```
 
+> **RTX5090 로컬 머신** (위 H100 conda-env가 없는 경우 — 데이터용 `.venv`엔 torch 없음): 학습 전용 venv를 별도 구축.
+> ```bash
+> uv venv --python 3.10 .venv-train     # .gitignore 등록됨
+> uv pip install --python .venv-train/bin/python torch torchvision --index-url https://download.pytorch.org/whl/cu128
+> uv pip install --python .venv-train/bin/python "transformers==4.57.6" peft accelerate tensorboard pandas pillow pyyaml tqdm python-dotenv datasets
+> .venv-train/bin/python -m src.train.launch --config configs/train_full.yaml --no-wandb   # .env GPU_DEVICES=1 → GPU1
+> ```
+> 실측: torch 2.11.0+cu128 / tf 4.57.6 / peft 0.19.1 / accel 1.13.0, RTX5090(sm_120) OK. WANDB 키 없으면 tensorboard 폴백(loss는 `outputs/<run>/runs/`).
+
+> **Full FT 1차 결과 (2026-06-07, RTX5090×1, `configs/train_full.yaml`)**: `outputs/llava_ov_full`(best=epoch1) — `src.eval_holdout` 실측
+> **in-domain acc 0.9990(ambig 1.0000/disambig 0.9978), OOD(Religion·SO) acc 0.9545(ambig 0.9997/disambig 0.8207), 갭 +0.0445.**
+> 핵심 편향지표(ambiguous=unknown 회수)는 미학습 OOD축에서도 0.9997. 약점은 OOD disambiguated 0.82(미학습 축 시각추론). epoch1≈epoch2(수렴).
+
 **GPU 프로파일 (`.env` 설정 → `src.train.launch`)** — 어떤 조합이든 **global(effective) batch는 64로 고정**:
 
 | `GPU_TYPE` | `GPU_COUNT` | per-device × accum × gpu | dtype | 실행 |
@@ -132,6 +145,9 @@ hold-out해 **"학습에서 안 본 편향 축"의 일반화**를 측정한다. 
 - **검증**: `python -m src.validate --ood` — train / in-domain-val / ood-val 3분할의 무결성(sample_id 겹침=0,
   OOD가 지정 축만 포함)과 축·극성 분포를 리포트.
 - 정본은 `configs/data.yaml`의 `ood_axes` + `paths.metadata` (학습·검증 공유). 배경: `.claude/researchs/` epoch 분석 문서.
+- **실제 accuracy 평가**(loss 아님): `python -m src.eval_holdout --model outputs/llava_ov_full --split both` —
+  train.py와 동일 분할을 재현해 in/OOD의 정답률 + ambig(unknown 회수)/disambig별 정확도를 vLLM 추론으로 측정.
+  full 모델은 그대로, LoRA는 `src.train.merge` 병합본 필요. vLLM 신/구 버전 API 모두 호환(structured_outputs↔guided_decoding).
 
 | 학습 모듈 | 역할 |
 |---|---|
