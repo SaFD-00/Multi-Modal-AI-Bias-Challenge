@@ -43,7 +43,7 @@ uv pip install -r requirements.txt
 
 ```bash
 .venv/bin/python -m src.map_sbbench   # SB-Bench real split 다운로드(~12.3GB) + 이미지 저장
-.venv/bin/python -m pytest tests/ -q  # 순수 함수 86개 GREEN (데이터 + 학습 + 추론 + 런처 + 레지스트리/경로)
+.venv/bin/python -m pytest tests/ -q  # 순수 함수 90개 GREEN (데이터 + 학습 + 추론 + 런처 + 레지스트리/경로)
 .venv/bin/python -m src.augment_bbq   # 부족 셀 BBQ 보강 + FairFace/MMBias 이미지 결합(최초 1회 다운로드)
 .venv/bin/python -m src.compose       # Unknown 재다양화/위치 균등 → train.csv
 .venv/bin/python -m src.metadata      # test 누수 제거 + 출처/라이선스 기록
@@ -135,8 +135,8 @@ export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 > **대용량 경로**: `data/`·`outputs/`는 루트 볼륨 보호를 위해 `/data/seungwoo/Multi-Modal-AI-Bias-Challenge/`로 심링크되어 있다.
 > **GPU 학습 사전 검증으로 적용된 코드 수정** — ① `collator.py`: `apply_chat_template`(텍스트 렌더) + `processor(text=, images=)` 2단계 분리(transformers 4.5x `images` 인자 중복 회피), ② `train.py`: `gradient_checkpointing` 시 `enable_input_require_grads()` 호출(grad 미전파 오류 방지).
 
-> 학습 입력 프롬프트는 베이스라인 추론 `prompt_text`와 **문자열 단위로 동일**하게 재현된다
-> (`src/train/prompt.py`, 정합 회귀를 `tests/test_train.py`가 검증). 스모크는 `--max-samples 64 --no-wandb`.
+> **프롬프트 정합 + family별 메시지 구조** — `src/train/prompt.py`가 학습·추론 공통 정본(정합 회귀를 `tests/test_train.py`가 검증). `llava_ov`는 베이스라인 `prompt_text`와 **문자열 단위 동일**한 단일 user turn을 유지하고, **chat_template 계열(qwen2_5_vl/mimo_vl)은 system(역할+규칙)/user(이미지+데이터) 2-turn으로 분리**한다.
+> **편향 회피 프롬프트 A/B 토글** — `BIAS_PROMPT_V2=1`이면 편향 회피·불확실성 지시(균형형: 부족→unknown / 충분→특정 답, 9축 명시)를 삽입한다(chat_template은 system, llava_ov는 PRE 뒤). 기본 off=베이스라인 정합. ⚠️ 학습·병합·평가·추론에서 **동일하게** 설정해야 정합(불일치 시 성능 왜곡). A/B는 두 안의 산출물 경로가 같으니 순차 학습→평가→기록(또는 `mv` 백업). 스모크는 `--max-samples 64 --no-wandb`.
 
 ### OOD 검증셋 (leave-axis-out)
 
@@ -157,7 +157,7 @@ hold-out해 **"학습에서 안 본 편향 축"의 일반화**를 측정한다. 
 |---|---|
 | `src/train/models.py` | 모델 family 레지스트리(model_id·freeze·pixel 배칭·렌더·LoRA 타깃) + 로드/배칭 헬퍼 |
 | `src/train/paths.py` | family별 출력경로 산출(`outputs/{family}/{adapters/lora, merged/{lora,full}, eval}`) |
-| `src/train/prompt.py` | 프롬프트 빌드 + family별 추론 렌더(llava_ov chat 래핑 / 그 외 apply_chat_template) + reason/target JSON |
+| `src/train/prompt.py` | 프롬프트 빌드(llava_ov 단일 turn / chat_template은 system·user 분리) + 편향회피 토글(`BIAS_PROMPT_V2`) + family별 추론 렌더 + reason/target JSON |
 | `src/train/dataset.py` | train.csv 로드 + 결정적 split + leave-axis-out OOD 3분할 |
 | `src/train/collator.py` | family 비의존 멀티모달 collator + assistant 토큰만 학습(-100 마스킹), mm 배칭은 레지스트리 위임 |
 | `src/train/train.py` | `--model {family}` LoRA/full + HF Trainer + wandb (런처 주입 batch/dtype override 지원) |

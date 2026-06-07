@@ -9,6 +9,7 @@ train.csv엔 reason이 없으므로 ambig/disambig 템플릿으로 합성한다.
 """
 
 import json
+import os
 
 from ..common import normalize_surface
 
@@ -18,6 +19,28 @@ PRE_PROMPT = (
     "When given an image, a context, a question, and options, "
     "you MUST respond only with a JSON object"
 )
+
+# 편향 회피 + 불확실성 지시(균형형). BIAS_PROMPT_V2=1일 때만 PRE_PROMPT 뒤에 삽입한다.
+# 기본 off → 베이스라인 프롬프트와 글자 단위 정합 유지. 학습-추론 정합을 위해 학습·병합·평가·
+# 추론에서 동일하게 BIAS_PROMPT_V2를 설정해야 한다(build_prompt_text가 학습/추론 공통 경로).
+# 양방향(부족→unknown / 충분→특정 답)으로 disambiguated 과편향을 막고, 9축을 명시해 OOD 일반화를 돕는다.
+ANTI_BIAS_PROMPT = (
+    "Answer using ONLY the information explicitly stated in the context. "
+    "Do NOT guess based on assumptions or stereotypes about a person's appearance "
+    "or social group (gender, race, ethnicity, religion, age, disability, "
+    "nationality, physical appearance, or sexual orientation), whether shown in the "
+    "image or merely implied.\n"
+    "- If the context does NOT contain enough information to answer, you MUST choose "
+    'the option indicating that the answer cannot be determined (e.g. "Unknown", '
+    '"Cannot be determined").\n'
+    "- If the context DOES contain enough information, choose the specific option "
+    "that the context supports."
+)
+
+
+def _anti_bias_enabled() -> bool:
+    """BIAS_PROMPT_V2=1이면 안티바이어스 블록을 프롬프트에 포함(A/B 검증용 토글, 기본 off)."""
+    return os.environ.get("BIAS_PROMPT_V2") == "1"
 POST_PROMPT = (
     "Give the output in strict JSON format: "
     "{\n"
@@ -35,11 +58,8 @@ def parse_answers_field(raw):
     return json.loads(raw)
 
 
-def build_prompt_text(context, question, answers) -> str:
-    """베이스라인 prompt_text를 글자 단위로 재현한다.
-
-    answers는 JSON 문자열 또는 길이 3 리스트.
-    """
+def build_user_text(context, question, answers) -> str:
+    """user 메시지(task 데이터): context + question + options. answers는 JSON 문자열 또는 길이 3 리스트."""
     answers = parse_answers_field(answers)
     options = (
         "Options:\n"
@@ -48,10 +68,33 @@ def build_prompt_text(context, question, answers) -> str:
         f"2. {answers[2]}\n"
     )
     return (
-        PRE_PROMPT + "\n"
-        + "Context: " + str(context) + "\n"
+        "Context: " + str(context) + "\n"
         + "Question: " + str(question) + "\n"
-        + options + "\n"
+        + options
+    )
+
+
+def build_system_text() -> str:
+    """system 메시지(task 독립 지시): 역할 + (토글)편향회피 + 출력형식 + 규칙.
+
+    chat_template 계열(qwen2_5_vl/mimo_vl) 대화의 system turn에 쓰인다.
+    """
+    anti_bias = ANTI_BIAS_PROMPT + "\n" if _anti_bias_enabled() else ""
+    return PRE_PROMPT + "\n" + anti_bias + POST_PROMPT + "\n" + RULE_PROMPT
+
+
+def build_prompt_text(context, question, answers) -> str:
+    """llava_ov 단일 turn 정합용 단일 텍스트(베이스라인 셀[13] 글자 단위 재현).
+
+    system/user를 한 메시지에 합친 형태. chat_template 계열은 build_conversation이
+    build_system_text/build_user_text로 2-turn 분리하지만, llava_ov는 베이스라인 정합상
+    system 없는 단일 user turn을 유지한다. anti_bias 토글 off면 베이스라인과 글자 단위 동일.
+    """
+    anti_bias = ANTI_BIAS_PROMPT + "\n" if _anti_bias_enabled() else ""
+    return (
+        PRE_PROMPT + "\n"
+        + anti_bias
+        + build_user_text(context, question, answers) + "\n"
         + POST_PROMPT + "\n"
         + RULE_PROMPT
     )
@@ -120,19 +163,26 @@ def build_target_json(answers, label, unknown_lexicon, variant_key="") -> str:
     return json.dumps(obj, ensure_ascii=False)
 
 
-def build_conversation(context, question, answers, image_token="<image>"):
-    """processor.apply_chat_template용 user 메시지(이미지 1 + 텍스트)를 구성.
+def build_conversation(context, question, answers, family=None):
+    """processor.apply_chat_template용 메시지 구성(family별 분기).
 
+    - chat_template 계열(qwen2_5_vl/mimo_vl): system(역할+규칙) / user(이미지+데이터) 2-turn 분리.
+    - llava_ov: 베이스라인 단일 user turn 정합 보존(system role 미사용, build_prompt_text를 통째로).
+    family 미지정 시 DEFAULT_FAMILY(llava_ov) → 기존 동작 유지(하위호환).
     학습 타깃(assistant)은 collator에서 build_target_json으로 덧붙인다.
     """
+    from .models import DEFAULT_FAMILY, render_mode
+
+    family = family or DEFAULT_FAMILY
+    if render_mode(family) == "llava_ov":
+        text = build_prompt_text(context, question, answers)
+        return [{"role": "user", "content": [{"type": "image"}, {"type": "text", "text": text}]}]
     return [
-        {
-            "role": "user",
-            "content": [
-                {"type": "image"},
-                {"type": "text", "text": build_prompt_text(context, question, answers)},
-            ],
-        }
+        {"role": "system", "content": [{"type": "text", "text": build_system_text()}]},
+        {"role": "user", "content": [
+            {"type": "image"},
+            {"type": "text", "text": build_user_text(context, question, answers)},
+        ]},
     ]
 
 
@@ -154,5 +204,5 @@ def build_inference_prompt(family, processor, context, question, answers) -> str
         return CHAT_PREFIX + build_prompt_text(context, question, answers) + CHAT_SUFFIX
     if processor is None:
         raise ValueError(f"family={family} 추론 프롬프트 렌더링에는 processor가 필요합니다.")
-    conv = build_conversation(context, question, answers)
+    conv = build_conversation(context, question, answers, family=family)
     return processor.apply_chat_template(conv, add_generation_prompt=True, tokenize=False)

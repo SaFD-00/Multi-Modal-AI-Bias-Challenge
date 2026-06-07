@@ -67,6 +67,40 @@ def test_prompt_text_accepts_list_and_string():
     assert P.build_prompt_text(ctx, q, lst) == P.build_prompt_text(ctx, q, js)
 
 
+def test_anti_bias_prompt_off_by_default(monkeypatch):
+    """BIAS_PROMPT_V2 미설정 → 안티바이어스 블록 미포함(베이스라인 정합 유지)."""
+    monkeypatch.delenv("BIAS_PROMPT_V2", raising=False)
+    text = P.build_prompt_text("ctx", "q?", json.dumps(["a", "b", "c"]))
+    assert P.ANTI_BIAS_PROMPT not in text
+
+
+def test_anti_bias_prompt_on_inserts_block(monkeypatch):
+    """BIAS_PROMPT_V2=1 → PRE_PROMPT와 Context 사이에 안티바이어스 블록 삽입."""
+    monkeypatch.setenv("BIAS_PROMPT_V2", "1")
+    text = P.build_prompt_text("ctx", "q?", json.dumps(["a", "b", "c"]))
+    assert P.ANTI_BIAS_PROMPT in text
+    assert text.index(P.PRE_PROMPT) < text.index(P.ANTI_BIAS_PROMPT) < text.index("Context:")
+
+
+def test_build_conversation_llava_ov_single_user_turn():
+    """llava_ov: system 없는 단일 user turn(베이스라인 정합). family 생략 시 기본도 동일."""
+    answers = json.dumps(["a", "b", "c"])
+    conv = P.build_conversation("ctx", "q?", answers, family="llava_ov")
+    assert len(conv) == 1 and conv[0]["role"] == "user"
+    assert P.build_conversation("ctx", "q?", answers) == conv  # 기본 family=llava_ov 하위호환
+
+
+def test_build_conversation_chat_template_splits_system_user():
+    """qwen2_5_vl: system(지시) + user(이미지+데이터) 2-turn 분리."""
+    conv = P.build_conversation("ctx", "q?", json.dumps(["a", "b", "c"]), family="qwen2_5_vl")
+    assert [m["role"] for m in conv] == ["system", "user"]
+    sys_text = conv[0]["content"][0]["text"]
+    user_text = conv[1]["content"][-1]["text"]
+    assert P.PRE_PROMPT in sys_text and "Context:" not in sys_text   # 지시는 system, 데이터 누출 없음
+    assert "Context: ctx" in user_text                              # 데이터는 user
+    assert any(c.get("type") == "image" for c in conv[1]["content"])  # user turn에 이미지 1개
+
+
 def test_reason_unknown_branch():
     answers = ["Not enough information", "The grandson", "The grandfather"]
     # label 0 = Unknown류 → 정보 부족 문장

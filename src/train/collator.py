@@ -78,7 +78,7 @@ class VLMCollator:
         import torch  # 지연 import (테스트 환경 보호)
 
         image = load_image(item["image_path"], img_size=self.img_size)
-        conv = build_conversation(item["context"], item["question"], item["answers"])
+        conv = build_conversation(item["context"], item["question"], item["answers"], family=self.family)
         # variant_key=context+question → 문항별로 reason 변형을 결정적으로 선택(표면 암기 차단).
         target = build_target_json(
             item["answers"], item["label"], self.unknown_lexicon,
